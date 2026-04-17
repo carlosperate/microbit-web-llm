@@ -1,0 +1,13 @@
+{
+  "name": "makecode-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./browser": "./dist/browser/index.js",
+    "./server": "./dist/server/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

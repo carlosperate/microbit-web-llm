@@ -1,0 +1,21 @@
+{
+  "name": "microbit-web-llm",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspaces --if-present",
+    "spike:svg": "npm --prefix spike run svg",
+    "spike:svg:headful": "npm --prefix spike run svg:headful",
+    "spike:hex": "npm --prefix spike run hex",
+    "spike:hex:headful": "npm --prefix spike run hex:headful"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
