@@ -37,7 +37,7 @@ Both browser executor (via iframe) and server executor (via puppeteer tab) imple
 
 ### Tool availability
 
-All tools are available on both targets. Stateful tools require an active session opened by `start_session` and closed by `end_session`. The `_from_code` variants are session-less.
+All tools are available on both targets **except `get_hex_file_from_code`**, which is server-only. The `makecode-embed` library exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract. On the browser target, `get_hex_file_from_code` throws a descriptive error directing callers to use `set_code` + `get_hex_file` instead. Stateful tools require an active session opened by `start_session` and closed by `end_session`. The `_from_code` variants are session-less.
 
 ### The `_from_code` variants are pure functions
 
@@ -85,9 +85,9 @@ All MakeCode iframe integration — browser executor, server executor Puppeteer 
 ### React component
 
 `MakeCodePanel` is a React component that wraps `@microbit/makecode-embed/react`. It must:
-- Accept an `onExecutorReady(executor: IframeExecutor) => void` callback prop
+- Accept an `onExecutorReady(executor: MakeCodeExecutor) => void` callback prop (typed as the interface, not the concrete class)
 - Expose nothing else about its internal iframe to the host app
-- Handle iframe load/unload lifecycle cleanly
+- Handle iframe load/unload lifecycle cleanly, including calling `dispose()` on the adapter on unmount
 
 ### Puppeteer browser pool
 

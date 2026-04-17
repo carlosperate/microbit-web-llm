@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-test-page/
 *.tsbuildinfo
 spike/out/
 .DS_Store
