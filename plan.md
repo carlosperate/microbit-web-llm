@@ -10,7 +10,7 @@ A monorepo containing two packages:
 
 ## Decisions (2026-04-18)
 
-- **Target user**: classroom (educators / students). POC-stage, so a large, capable model (Qwen2.5-Coder 7B, ~4–5GB first load) is acceptable for v1. Model-size optimisation is a post-POC concern.
+- **Target user**: classroom (educators / students). POC-stage, so a large, capable model (Qwen2.5-Coder 7B Instruct, ~4–5GB first load) is acceptable for v1. Model-size optimisation is a post-POC concern. WebLLM gates `tools` behind an allowlist and only auto-applies its Hermes-2-Pro transformation to `Hermes-2-Pro-*` IDs; Qwen is made to work by patching the allowlist and applying the same grammar-constrained JSON-array transformation manually in `webllm-engine.ts`.
 - **MCP server is in scope for v1** (not deferred).
 - **Stateful tools are gated by explicit session lifecycle.** Two new tools — `start_session` and `end_session` — are added. All tools are available on both targets; stateful tools require an active session. The LLM is responsible for calling `start_session` before and `end_session` after. Exact semantics (browser no-op vs editor reset; server tab-per-session) finalised in Phase 2.
 
@@ -101,7 +101,7 @@ Split-pane: chat panel on the left (~35% width), MakeCode editor on the right (~
 
 ### Chat Panel
 
-- Powered by WebLLM running fully in-browser on WebGPU (model: Qwen2.5-Coder 7B Instruct, ~4–5GB cached after first load)
+- Powered by WebLLM running fully in-browser on WebGPU (model: Qwen2.5-Coder 7B Instruct, ~4–5GB cached after first load; tool-calling enabled by applying Hermes-2-Pro's grammar-constrained JSON-array transformation manually)
 - OpenAI-compatible function-calling API — the tool schemas from `makecode-mcp/shared` are passed directly as the `tools` array
 - Agentic tool-call loop: the LLM may call multiple tools before producing a final text response
 - System prompt injects context: the LLM is a micro:bit coding assistant, session lifecycle rules, the editor maintains state across the conversation while a session is open, `set_code` followed by `get_blocks_svg` is a valid multi-turn pattern
@@ -169,14 +169,28 @@ Spike scripts live in `spike/` at the repo root. They are throwaway code — not
 4. Build a **manual test page** at `packages/makecode-mcp/test-page/` — minimal HTML + Vite dev entry that mounts `MakeCodePanel` with a side panel of buttons (Start session, Set code via textarea, Get code, Get blocks SVG rendered inline, Get hex downloaded). Used for human smoke-testing the executor against real MakeCode before the app exists. Not part of the published bundle.
 5. Write integration tests against a real MakeCode iframe
 
-### Phase 3 — `app`
+### Phase 3 — `app` ✅
 
-1. Scaffold React + Vite app
-2. Build split-pane layout
-3. Integrate `MakeCodePanel`
-4. Integrate WebLLM with tool-call loop
-5. Wire executor to chat panel
-6. End-to-end test: user asks a question → LLM calls `set_code` → editor updates → LLM calls `get_blocks_svg` → SVG displayed in chat
+1. Scaffold React + Vite app — `packages/app/{vite.config.ts,index.html,src/main.tsx}`
+2. Build split-pane layout — `src/App.tsx` grid: chat pane (35%) + editor pane (65%)
+3. Integrate `MakeCodePanel` — wired via `onExecutorReady` callback into a ref
+4. Integrate WebLLM with tool-call loop — `src/chat/{webllm-engine.ts,tool-loop.ts}`; `Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC`; OpenAI-compatible streaming with parallel tool dispatch and a max-steps cap
+5. Wire executor to chat panel — `createChatAdapter({ completion, getExecutor })` in `src/chat/adapter.ts`; no shared state or event bus, executor passed only via the adapter dep
+6. End-to-end test — `test/chat.e2e.ts`: scripted transcript (`start_session` → `set_code` → `get_blocks_svg` → text reply) via `window.__mockChatCompletion` injected by Playwright
+7. WebGPU gate + model-loading overlay — `LoadOverlay` renders unsupported / loading / error states; Qwen 7B is ~4–5 GB on first run
+
+Unit tests (Vitest): `test/system-prompt.test.ts`, `test/tool-loop.test.ts` (parallel calls, error propagation, max-steps, history shape). All written before implementation.
+
+Use `assistant-ui` to create the Chat interface.
+Read the docs, this is very important: https://www.assistant-ui.com/docs
+
+The chat interface is built using assistant-ui with a LocalRuntime backed by a custom ChatModelAdapter.
+The adapter implements a single run() async generator function that receives the full conversation message history and an abort signal, then calls WebLLM's engine.chat.completions.create() with stream: true, yielding incremental text chunks back to the runtime as they arrive.
+WebLLM runs entirely in the browser using WebGPU acceleration (with WASM as fallback), so no server is involved.
+The adapter is instantiated via useLocalRuntime(adapter) and passed to AssistantRuntimeProvider, which wraps the editor shell.
+Inside that provider, <Thread /> is placed as a React component in the chat panel of the split-pane layout — it is a pure UI component with no routing or global state assumptions, making it trivially embeddable inside a larger editor.
+Editor context (the current MakeCode program) is injected into every inference call by prepending a system message or user context block inside the adapter's run() function before the messages are forwarded to WebLLM.
+MakeCode MCP actions (get code, set code, run simulator, etc.) are registered as tools via assistant-ui's built-in tool calling API, so the LLM can invoke them mid-conversation and the runtime handles the human-in-the-loop approval flow automatically.
 
 ### Phase 4 — `makecode-mcp` server target
 

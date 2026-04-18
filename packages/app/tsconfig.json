@@ -3,8 +3,12 @@
   "compilerOptions": {
     "composite": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": ".",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "noEmit": true
   },
-  "include": ["src"],
+  "include": ["src", "test"],
   "references": [{ "path": "../makecode-mcp" }]
 }

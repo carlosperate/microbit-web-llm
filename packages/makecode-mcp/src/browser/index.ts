@@ -1,3 +1,4 @@
+export * from "../shared/index.js";
 export * from "./driver-port.js";
 export * from "./iframe-executor.js";
 export * from "./frame-driver-adapter.js";
