@@ -7,14 +7,21 @@
     "./browser": "./dist/browser/index.js",
     "./server": "./dist/server/index.js"
   },
+  "bin": {
+    "makecode-mcp": "./dist/server/bin.js"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
     "dev:test-page": "vite --config test-page/vite.config.ts",
-    "test:e2e": "playwright test --config playwright.config.ts"
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "start:server": "node dist/server/bin.js"
   },
   "dependencies": {
     "@microbit/makecode-embed": "^0.5.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "esbuild": "^0.28.0",
+    "puppeteer": "^23.0.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

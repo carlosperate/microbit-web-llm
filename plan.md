@@ -194,10 +194,15 @@ MakeCode MCP actions (get code, set code, run simulator, etc.) are registered as
 
 ### Phase 4 — `makecode-mcp` server target
 
-1. Implement `BrowserPool` and `TabExecutor` (session-scoped tabs); both SVG and hex go through Puppeteer
-2. Implement `McpServer`
-3. Test with Claude Desktop or MCP Inspector
-4. End-to-end test: Claude generates code → `get_blocks_svg_from_code` returns SVG → displayed in Claude chat
+1. ✅ Implement `BrowserPool`, `TabPool`/`PuppeteerTabPool`, and `TabExecutor` (session-scoped tabs); both SVG and hex go through Puppeteer. `BrowserPool` is typed against a minimal `PageLike`/`BrowserLauncher` so it's unit-testable without a real browser; `TabExecutor` takes a `TabPool` so session logic is unit-testable without Puppeteer.
+2. ✅ Implement `McpServer` — low-level `Server` from `@modelcontextprotocol/sdk` with an 8-entry dispatch table sourced from `shared/tools.ts`. `SessionError` is surfaced as a structured `isError` content block with the original code. Not using high-level `McpServer` because its `inputSchema` is zod-only and would duplicate our JSON-schema tool defs.
+3. ✅ Stdio CLI entrypoint — `bin.ts` launches headless Puppeteer, wires `PuppeteerTabPool` → `TabExecutor` → `buildMcpServer`, disposes on SIGINT/SIGTERM. Registered as the `makecode-mcp` bin.
+4. Pending — manual smoke test with Claude Desktop or MCP Inspector.
+5. Pending — end-to-end test: Claude generates code → `get_blocks_svg_from_code` returns SVG → displayed in Claude chat.
+
+Shell page: served by an ephemeral local HTTP server (`src/server/shell/shell-server.ts`) that bundles `shim.ts` with esbuild on first use and caches it. `shim.ts` wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks` and exposes `window.__mkcp`. `PuppeteerDriver` implements `MakeCodeDriver` as `page.evaluate` calls against that API.
+
+Shared extraction: default MakeCode project files (`pxt.json` with `preferredEditor: "tsprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` and are used by `IframeExecutor`, `TabExecutor`, and the server shim.
 
 ***
 
@@ -206,4 +211,4 @@ MakeCode MCP actions (get code, set code, run simulator, etc.) are registered as
 1. **[decided]** Blocks SVG accessibility — resolved by Spike 1: `createMakeCodeRenderBlocks` from `@microbit/makecode-embed/vanilla` works headlessly.
 2. **[decided]** Hex interception via Puppeteer — resolved by Spike 2: `MakeCodeFrameDriver` + `onDownload` works with `controller=2`.
 3. **[open]** `start_session` / `end_session` semantics on the browser target — no-op vs editor reset on start; clear editor on end. Decide in Phase 2.
-4. **[open]** MCP transport — SSE (for remote clients like Claude.ai) vs stdio (for local clients like Claude Desktop). May need to support both. Decide before Phase 4.
+4. **[decided for v1]** MCP transport — stdio is implemented in `bin.ts` (targets Claude Desktop / MCP Inspector). SSE/streamable HTTP deferred; the SDK supports it so adding a second transport is a thin wrapper around `buildMcpServer(...)`.

@@ -91,10 +91,51 @@ All MakeCode iframe integration — browser executor, server executor Puppeteer 
 
 `BrowserPool` manages one persistent Puppeteer browser process for the lifetime of the MCP server. It must:
 - Launch lazily on first use, not at import time
-- Expose a `withTab<T>(fn: (page: Page) => Promise<T>): Promise<T>` method
+- Expose a `withTab<T>(fn: (page: PageLike) => Promise<T>): Promise<T>` method
 - Always close the tab in a `finally` block regardless of errors
 - Never close the browser process itself (it stays alive between requests)
 - Handle browser crashes by relaunching on next use
+
+`BrowserPool` is deliberately typed against a minimal `PageLike` (`close`/`goto`/`evaluate`) and a `BrowserLauncher` callback so it can be unit-tested with doubles. Puppeteer is only wired in at `bin.ts` and `PuppeteerTabPool`.
+
+### Server target layering
+
+```
+bin.ts (CLI)
+  └── buildMcpServer({ executor })                    ← src/server/mcp-server.ts
+        └── TabExecutor (implements MakeCodeExecutor) ← src/server/tab-executor.ts
+              └── TabPool (interface)                 ← src/server/tab-pool.ts
+                    └── PuppeteerTabPool              ← src/server/puppeteer-tab-pool.ts
+                          ├── BrowserPool             ← src/server/browser-pool.ts
+                          ├── PuppeteerDriver         ← src/server/puppeteer-driver.ts
+                          └── startShellServer()      ← src/server/shell/shell-server.ts
+```
+
+`TabExecutor` owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
+
+### MCP server shell
+
+The MCP server serves a static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`:
+
+- `src/server/shell/shell.html` — one `<iframe id="mk">` and a `<script type="module" src="/shim.js">`.
+- `src/server/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`importProject`, `saveProject`, `compile`, `renderBlocks`).
+- `src/server/shell/shell-server.ts` — reads `shell.html` and bundles `shim.ts` with esbuild on first use (cached for the process lifetime), then serves both on `http://127.0.0.1:<ephemeral>`.
+
+`PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Do not add more IPC surface (e.g., `page.exposeFunction`) unless a tool genuinely cannot be expressed as a single evaluate call.
+
+### MCP tool dispatch
+
+`src/server/mcp-server.ts` uses the low-level `Server` class from `@modelcontextprotocol/sdk` and keeps an 8-entry `dispatch` table at module scope mapping tool name → `(executor, args) => Promise<unknown>`. `ListTools` is generated from `shared/tools.ts` (the single source of truth for schemas). `SessionError` is translated into `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }` so LLMs can distinguish `missing` / `unknown` / `expired` sessions from arbitrary failures.
+
+We deliberately do **not** use the high-level `McpServer`: it requires zod `inputSchema`, and our tool schemas are JSON Schema (shared with the OpenAI-compatible browser path). The deprecation warning on `Server` is an accepted tradeoff.
+
+### CLI entrypoint
+
+`bin.ts` (registered as the `makecode-mcp` bin) wires `PuppeteerTabPool` → `TabExecutor` → `buildMcpServer` → `StdioServerTransport`, and disposes the executor on SIGINT/SIGTERM. The server is a standard stdio MCP server — point Claude Desktop / MCP Inspector at `node dist/server/bin.js` (or `npx makecode-mcp` once installed).
+
+### Shared project defaults
+
+Default MakeCode project files (`pxt.json` with `preferredEditor: "tsprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` as `fillProjectDefaults(text, code)` and `EMPTY_EDITOR_ERROR`. Both executors and the server shim import from here — do not re-declare these constants in new code.
 
 ## Package: `app`
 
@@ -146,3 +187,4 @@ The system prompt must tell the LLM:
 - Do not add a backend server or API proxy. Everything must run from static files.
 - Do not share executor state between multiple chat sessions. Each page load is a fresh session.
 - Do not duplicate tool schema definitions. They live in `shared/tools.ts` only.
+- Do not duplicate MakeCode project defaults. They live in `shared/project-defaults.ts` only.
