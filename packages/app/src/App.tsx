@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react";
 import { MakeCodePanel } from "makecode-mcp/browser";
 import type { BrowserExecutor } from "makecode-mcp/browser";
-import { createLogger, isLoggingEnabled } from "makecode-mcp/browser";
+import { createLogger, isLoggingEnabled, setLoggingEnabled } from "makecode-mcp/browser";
 import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
 import { loadWebLLM, isWebGPUSupported, MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+import { DEFAULT_SETTINGS, type ChatSettings } from "./chat/settings.js";
+import { SettingsPanel } from "./SettingsPanel.js";
 
 const log = createLogger("app");
 
@@ -15,11 +17,11 @@ type ChatAdapter = ReturnType<typeof createChatAdapter>;
 /** Hosts its own runtime so remounting this component (via `key`) gives a
  *  fresh, empty thread — used to reset the conversation when the model
  *  changes without touching the MakeCode iframe. */
-function ChatThread({ adapter, modelReady }: { adapter: ChatAdapter; modelReady: boolean }) {
+function ChatThread({ adapter }: { adapter: ChatAdapter }) {
   const runtime = useLocalRuntime(adapter);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread modelReady={modelReady} />
+      <Thread />
     </AssistantRuntimeProvider>
   );
 }
@@ -37,12 +39,20 @@ export function App(props: {
   );
   const [selectedModelId, setSelectedModelId] = useState<ModelId>(MODEL_ID);
   const [loadedModelId, setLoadedModelId] = useState<ModelId | null>(props.mockCompletion ? MODEL_ID : null);
-  // Incremented whenever a new model finishes loading so the chat subtree
-  // remounts with a fresh runtime. Kept separate from loadedModelId so
-  // re-loading the same model id still counts as a new conversation.
+  // Incremented whenever a new model finishes loading OR the user resets the
+  // chat, so the chat subtree remounts with a fresh runtime. Kept separate
+  // from loadedModelId so re-loading the same model id still counts as a new
+  // conversation.
   const [chatEpoch, setChatEpoch] = useState(0);
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef<ChatSettings>(settings);
+  settingsRef.current = settings;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const completionRef = useRef<ChatCompletionFn | null>(props.mockCompletion ?? null);
   const executorRef = useRef<BrowserExecutor | null>(null);
+  // Not shown to users — exposed as a data attribute on the chat pane so
+  // tests can wait for the iframe executor to hand over without the UI
+  // having to display a noisy "editor ready" badge.
   const [executorReady, setExecutorReady] = useState(false);
 
   const loadModel = useCallback(async (modelId: ModelId) => {
@@ -81,6 +91,15 @@ export function App(props: {
           return completion(args);
         },
         getExecutor: () => executorRef.current,
+        getSettings: () => {
+          const s = settingsRef.current;
+          return {
+            systemPrompt: s.systemPrompt,
+            temperature: s.temperature,
+            maxTokens: s.maxTokens,
+            maxSteps: s.maxSteps,
+          };
+        },
       }),
     [ensureLoaded],
   );
@@ -104,12 +123,35 @@ export function App(props: {
     }
   }, []);
 
+  const handleSettingsChange = useCallback((next: ChatSettings) => {
+    setSettings(next);
+    // Verbose logging is the one setting with a side-effect outside state.
+    setLoggingEnabled(next.verboseLogging);
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem("mkcp:log", next.verboseLogging ? "1" : "0");
+      }
+    } catch {
+      /* best-effort */
+    }
+  }, []);
+
+  const handleResetChat = useCallback(() => {
+    log.info("user: reset chat");
+    setChatEpoch((n) => n + 1);
+  }, []);
+
+  const handleResetEditor = useCallback(() => {
+    log.info("user: reset editor");
+    executorRef.current?.setCode("").catch((err) => log.warn("reset editor failed", err));
+  }, []);
+
   const modelLoaded = loadedModelId === selectedModelId && loadState.status === "ready";
   const modelLoading = loadState.status === "loading";
 
   return (
     <div className="app-root">
-      <div className="chat-pane">
+      <div className="chat-pane" data-executor-ready={executorReady ? "true" : "false"}>
         <header className="chat-header">
           <span>micro:bit Assistant</span>
           <div className="model-picker">
@@ -137,17 +179,76 @@ export function App(props: {
               </button>
             )}
           </div>
-          <span className="status" data-testid="editor-status">
-            {executorReady ? "editor ready" : "editor loading…"}
-          </span>
+          <button
+            type="button"
+            className="settings-btn"
+            onClick={() => setSettingsOpen((v) => !v)}
+            disabled={modelLoading}
+            aria-label="Open settings"
+            aria-expanded={settingsOpen}
+            data-testid="settings-toggle"
+            title="Settings"
+          >
+            <SettingsIcon />
+          </button>
         </header>
-        <ChatThread key={chatEpoch} adapter={adapter} modelReady={modelLoaded} />
-        <LoadOverlay state={loadState} onRetry={() => loadModel(selectedModelId)} />
+        <div className="chat-body">
+          <ChatThread key={chatEpoch} adapter={adapter} />
+          {!modelLoaded && loadState.status !== "loading" && loadState.status !== "unsupported" && loadState.status !== "error" && (
+            <ModelNotLoadedOverlay />
+          )}
+          <LoadOverlay state={loadState} onRetry={() => loadModel(selectedModelId)} />
+        </div>
+        {settingsOpen && (
+          <SettingsPanel
+            settings={settings}
+            onChange={handleSettingsChange}
+            onClose={() => setSettingsOpen(false)}
+            onResetChat={() => {
+              handleResetChat();
+              setSettingsOpen(false);
+            }}
+            onResetEditor={handleResetEditor}
+          />
+        )}
       </div>
       <div className="editor-pane">
         <MakeCodePanel onExecutorReady={handleExecutorReady} />
       </div>
     </div>
+  );
+}
+
+function ModelNotLoadedOverlay() {
+  return (
+    <div className="model-gate-overlay" data-testid="model-not-loaded">
+      <div className="model-gate-card">
+        <h3>Load a model to begin</h3>
+        <p>
+          Pick a model from the dropdown above and click <strong>Load model</strong>. The
+          first load downloads ~4–5 GB and is cached for future visits.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
 

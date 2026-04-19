@@ -65,7 +65,7 @@ test("full chat → set_code → get_blocks_svg flow using mocked WebLLM", async
   await page.goto("/");
 
   // Wait for MakeCode editor iframe to report ready.
-  await expect(page.getByTestId("editor-status")).toHaveText(/editor ready/i, {
+  await expect(page.locator('.chat-pane[data-executor-ready="true"]')).toBeVisible({
     timeout: 30_000,
   });
 

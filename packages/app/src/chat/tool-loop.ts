@@ -35,10 +35,18 @@ export interface StreamChunk {
   ];
 }
 
+export interface CompletionOptions {
+  /** Sampling temperature (0–1.5). Higher = more random. */
+  temperature?: number;
+  /** Hard cap on response tokens. `null`/`undefined` = no cap. */
+  maxTokens?: number | null;
+}
+
 export type ChatCompletionFn = (params: {
   messages: OpenAIMessage[];
   tools: ToolDescriptor[];
   signal: AbortSignal;
+  options?: CompletionOptions;
 }) => Promise<AsyncIterable<StreamChunk>> | AsyncIterable<StreamChunk>;
 
 export type ToolLoopEvent =
@@ -52,6 +60,7 @@ export interface ToolLoopOptions {
   tools: ToolDescriptor[];
   signal: AbortSignal;
   maxSteps?: number;
+  completionOptions?: CompletionOptions;
 }
 
 interface PendingToolCall {
@@ -136,7 +145,7 @@ function historyHasSubstantiveCall(history: OpenAIMessage[]): boolean {
 }
 
 export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoopEvent> {
-  const { completion, executor, tools, signal } = opts;
+  const { completion, executor, tools, signal, completionOptions } = opts;
   const maxSteps = opts.maxSteps ?? 10;
   const history: OpenAIMessage[] = [...opts.messages];
   // Fires at most once per run: when the model stalls (emits []) before doing
@@ -152,7 +161,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         lastRole: history[history.length - 1]?.role,
       });
       const endStep = log.time(`step ${step + 1} stream`);
-      const stream = await completion({ messages: history, tools, signal });
+      const stream = await completion({ messages: history, tools, signal, options: completionOptions });
       const pending = new Map<number, PendingToolCall>();
       let assistantText = "";
       let finish: StreamChunk["choices"][0]["finish_reason"] = null;
@@ -185,11 +194,18 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         if (stalled) {
           stallRetried = true;
           log.warn("empty tool_calls before any substantive work → injecting STALL_REMINDER and retrying");
-          history.push({ role: "system", content: STALL_REMINDER });
+          // Merge into the leading system message rather than pushing a new
+          // system mid-history — WebLLM's native tool-calling path rejects
+          // non-first system messages (SystemMessageOrderError).
+          if (history[0]?.role === "system") {
+            history[0] = { role: "system", content: `${history[0].content}\n\n${STALL_REMINDER}` };
+          } else {
+            history.unshift({ role: "system", content: STALL_REMINDER });
+          }
           continue;
         }
         log.info("empty tool_calls after substantive work → follow-up with tools disabled for plain-text reply");
-        const followUp = await completion({ messages: history, tools: [], signal });
+        const followUp = await completion({ messages: history, tools: [], signal, options: completionOptions });
         for await (const chunk of followUp) {
           if (signal.aborted) throw new DOMException("Aborted", "AbortError");
           const content = chunk.choices[0]?.delta?.content;

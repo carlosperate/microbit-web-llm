@@ -6,12 +6,12 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 
-export function Thread({ modelReady = true }: { modelReady?: boolean }) {
+export function Thread() {
   return (
     <ThreadPrimitive.Root className="thread-root">
       <ThreadPrimitive.Viewport className="thread-viewport">
         <ThreadPrimitive.Empty>
-          {modelReady ? <EmptyState /> : <ModelNotLoaded />}
+          <EmptyState />
         </ThreadPrimitive.Empty>
         <ThreadPrimitive.Messages
           components={{
@@ -20,17 +20,8 @@ export function Thread({ modelReady = true }: { modelReady?: boolean }) {
           }}
         />
       </ThreadPrimitive.Viewport>
-      <Composer disabled={!modelReady} />
+      <Composer />
     </ThreadPrimitive.Root>
-  );
-}
-
-function ModelNotLoaded() {
-  return (
-    <div className="thread-empty" data-testid="model-not-loaded">
-      <h2>Load a model to begin</h2>
-      <p>Pick a model from the dropdown above and click <strong>Load model</strong>. The first load downloads ~4–5 GB and is cached for future visits.</p>
-    </div>
   );
 }
 
@@ -126,18 +117,17 @@ function truncate(s: string, n: number) {
   return s.length > n ? `${s.slice(0, n)}… (${s.length - n} more chars)` : s;
 }
 
-function Composer({ disabled = false }: { disabled?: boolean }) {
+function Composer() {
   return (
     <ComposerPrimitive.Root className="composer">
       <ComposerPrimitive.Input
         rows={2}
         autoFocus
-        placeholder={disabled ? "Load a model to start chatting…" : "Ask for a micro:bit program…"}
+        placeholder="Ask for a micro:bit program…"
         className="composer-input"
-        disabled={disabled}
       />
       <ThreadPrimitive.If running={false}>
-        <ComposerPrimitive.Send className="composer-send" disabled={disabled}>Send</ComposerPrimitive.Send>
+        <ComposerPrimitive.Send className="composer-send">Send</ComposerPrimitive.Send>
       </ThreadPrimitive.If>
       <ThreadPrimitive.If running>
         <ComposerPrimitive.Cancel className="composer-cancel">Stop</ComposerPrimitive.Cancel>

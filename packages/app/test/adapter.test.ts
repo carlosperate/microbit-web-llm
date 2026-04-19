@@ -3,6 +3,9 @@ import type { ThreadMessage } from "@assistant-ui/react";
 import type { BrowserExecutor } from "makecode-mcp/browser";
 import { convertMessages, createChatAdapter } from "../src/chat/adapter.js";
 import type { ChatCompletionFn, StreamChunk } from "../src/chat/tool-loop.js";
+import { DEFAULT_SETTINGS } from "../src/chat/settings.js";
+
+const getSettings = () => DEFAULT_SETTINGS;
 
 function userMsg(text: string): ThreadMessage {
   return {
@@ -101,7 +104,7 @@ describe("createChatAdapter", () => {
 
   it("reports an error when the executor is not ready", async () => {
     const completion: ChatCompletionFn = async () => asStream([chunk({ content: "hi" }, "stop")]);
-    const adapter = createChatAdapter({ completion, getExecutor: () => null });
+    const adapter = createChatAdapter({ completion, getExecutor: () => null, getSettings });
     const results = await drain(adapter.run(makeOpts([userMsg("hi")])) as AsyncGenerator<any>);
     const last = results[results.length - 1];
     expect(last.status.type).toBe("incomplete");
@@ -111,7 +114,7 @@ describe("createChatAdapter", () => {
   it("streams text and completes with status=complete", async () => {
     const completion: ChatCompletionFn = async () =>
       asStream([chunk({ content: "Hello" }), chunk({ content: " world" }), chunk({}, "stop")]);
-    const adapter = createChatAdapter({ completion, getExecutor: () => makeExecutor() });
+    const adapter = createChatAdapter({ completion, getExecutor: () => makeExecutor(), getSettings });
     const results = await drain(adapter.run(makeOpts([userMsg("hi")])) as AsyncGenerator<any>);
     const final = results[results.length - 1];
     expect(final.status).toEqual({ type: "complete", reason: "stop" });
@@ -133,7 +136,7 @@ describe("createChatAdapter", () => {
       }
       return asStream([chunk({ content: "done" }), chunk({}, "stop")]);
     };
-    const adapter = createChatAdapter({ completion, getExecutor: () => executor });
+    const adapter = createChatAdapter({ completion, getExecutor: () => executor, getSettings });
     const results = await drain(adapter.run(makeOpts([userMsg("go")])) as AsyncGenerator<any>);
     const final = results[results.length - 1];
     const toolPart = final.content.find((p: any) => p.type === "tool-call");
@@ -149,7 +152,7 @@ describe("createChatAdapter", () => {
     const completion: ChatCompletionFn = async () => {
       throw new Error("boom");
     };
-    const adapter = createChatAdapter({ completion, getExecutor: () => makeExecutor() });
+    const adapter = createChatAdapter({ completion, getExecutor: () => makeExecutor(), getSettings });
     const results = await drain(adapter.run(makeOpts([userMsg("x")])) as AsyncGenerator<any>);
     const final = results[results.length - 1];
     expect(final.status).toEqual({ type: "incomplete", reason: "error", error: "boom" });

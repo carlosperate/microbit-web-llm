@@ -32,10 +32,32 @@ body {
   align-items: center;
 }
 
-.chat-header .status {
-  font-size: 0.75rem;
-  font-weight: 400;
+.settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   color: #6b7280;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.settings-btn:hover:not(:disabled) {
+  background: #f3f4f6;
+  color: #111827;
+  border-color: #e5e7eb;
+}
+.settings-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.settings-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .model-picker {
@@ -240,3 +262,158 @@ body {
 }
 
 .chat-pane { position: relative; }
+
+/* Positioning context for chat-body overlays (model-not-loaded, load-progress)
+ * — keeps them clear of the header so the model picker stays usable. */
+.chat-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Darker overlay shown while no model is loaded — covers viewport AND composer
+ * so users can't attempt to send a message before they've loaded a model. */
+.model-gate-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 5;
+}
+.model-gate-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  max-width: 36ch;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+.model-gate-card h3 { font-size: 1rem; margin: 0 0 0.5rem; }
+.model-gate-card p { font-size: 0.9rem; color: #4b5563; line-height: 1.45; margin: 0; }
+
+/* Settings overlay covers the chat area (below the header, above everything
+ * except the model-gate/load overlays). Uses the same containing block as
+ * .loading-overlay — .chat-pane is position:relative. */
+.settings-overlay {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  z-index: 4;
+  overflow: hidden;
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+.settings-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+.settings-close {
+  width: 28px;
+  height: 28px;
+  font-size: 1.25rem;
+  line-height: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+}
+.settings-close:hover { background: #f3f4f6; color: #111827; }
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.settings-section h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+  margin: 0;
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+.settings-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.settings-field-inline {
+  font-size: 0.9rem;
+}
+.settings-field-value {
+  font-variant-numeric: tabular-nums;
+  color: #374151;
+  font-weight: 500;
+}
+.settings-field input[type="range"] {
+  width: 100%;
+}
+.settings-field input[type="number"] {
+  width: 8rem;
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+}
+.settings-textarea {
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  resize: vertical;
+  min-height: 10rem;
+}
+.settings-help {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin: 0;
+}
+.settings-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.settings-secondary {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #1f2937;
+  border-radius: 6px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.settings-secondary:hover { background: #f9fafb; }

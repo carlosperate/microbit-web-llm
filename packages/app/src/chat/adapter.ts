@@ -64,9 +64,18 @@ export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessa
   return out;
 }
 
+export interface AdapterRuntimeSettings {
+  systemPrompt: string;
+  temperature: number;
+  maxTokens: number | null;
+  maxSteps: number;
+}
+
 export interface ChatAdapterDeps {
   completion: ChatCompletionFn;
   getExecutor: () => BrowserExecutor | null;
+  /** Read live settings on each turn; never close over a stale snapshot. */
+  getSettings: () => AdapterRuntimeSettings;
 }
 
 export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
@@ -99,8 +108,10 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
         return;
       }
 
+      const settings = deps.getSettings();
       const converted = convertMessages(opts.messages);
-      const messages: OpenAIMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...converted];
+      const systemPrompt = settings.systemPrompt.trim() || SYSTEM_PROMPT;
+      const messages: OpenAIMessage[] = [{ role: "system", content: systemPrompt }, ...converted];
       log.debug("messages prepared", {
         total: messages.length,
         roles: messages.map((m) => m.role),
@@ -120,6 +131,11 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
           messages,
           tools: TOOL_SCHEMAS,
           signal: opts.abortSignal,
+          maxSteps: settings.maxSteps,
+          completionOptions: {
+            temperature: settings.temperature,
+            maxTokens: settings.maxTokens,
+          },
         }) as AsyncIterable<ToolLoopEvent>) {
           if (ev.type === "text-delta") {
             textBuffer += ev.delta;

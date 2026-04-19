@@ -141,18 +141,23 @@ export async function loadWebLLM(
   endLoad();
   log.info("engine ready", { modelId });
 
-  return async ({ messages, tools, signal: _signal }) => {
+  return async ({ messages, tools, signal: _signal, options }) => {
     const hasTools = tools.length > 0;
+    const samplingOpts: Record<string, unknown> = {};
+    if (typeof options?.temperature === "number") samplingOpts.temperature = options.temperature;
+    if (typeof options?.maxTokens === "number" && options.maxTokens > 0) samplingOpts.max_tokens = options.maxTokens;
     log.debug("chat.completions.create", {
       hasTools,
       toolCount: tools.length,
       messageCount: messages.length,
       manualTransform,
+      sampling: samplingOpts,
     });
     if (!hasTools) {
       const stream = await engine.chat.completions.create({
         messages: messages as any,
         stream: true,
+        ...samplingOpts,
       });
       return stream as unknown as AsyncIterable<StreamChunk>;
     }
@@ -163,6 +168,7 @@ export async function loadWebLLM(
         tools: tools as any,
         tool_choice: "auto",
         stream: true,
+        ...samplingOpts,
       });
       return stream as unknown as AsyncIterable<StreamChunk>;
     }
@@ -190,6 +196,7 @@ export async function loadWebLLM(
       messages: withSystem as any,
       response_format: { type: "json_object", schema: FUNCTION_CALL_SCHEMA_ARRAY } as any,
       stream: true,
+      ...samplingOpts,
     });
     return parseHermesStream(stream as any);
   };
