@@ -7,7 +7,7 @@ const DEFAULT_PXT_JSON = JSON.stringify(
     description: "",
     dependencies: { core: "*", radio: "*" },
     files: ["main.blocks", "main.ts", "README.md"],
-    preferredEditor: "tsprj",
+    preferredEditor: "blocksprj",
   },
   null,
   2,

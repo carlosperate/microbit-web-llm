@@ -41,8 +41,12 @@ export class IframeExecutor implements BrowserExecutor {
     log.info("setCode", { length: code.length, preview: preview(code) });
     try {
       const current = await this.driver.getProject();
+      // Drop main.blocks so the blocks view re-decompiles from the new main.ts.
+      // Keeping the previous main.blocks would cause the blocks editor to render
+      // stale blocks and ignore the TS update.
+      const { "main.blocks": _drop, ...rest } = current.text;
       await this.driver.setProject({
-        text: fillProjectDefaults(current.text, code),
+        text: { ...fillProjectDefaults(rest, code), "main.blocks": "" },
       });
       log.info("setCode → ok");
     } catch (err) {

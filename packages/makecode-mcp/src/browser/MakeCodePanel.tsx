@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import { MakeCodeFrame } from "@microbit/makecode-embed/react";
-import type { MakeCodeFrameDriver } from "@microbit/makecode-embed/vanilla";
+import {
+  defaultMakeCodeProject,
+  type MakeCodeFrameDriver,
+} from "@microbit/makecode-embed/vanilla";
 import { IframeExecutor } from "./iframe-executor.js";
 import { MakeCodeFrameDriverAdapter } from "./frame-driver-adapter.js";
 import type { BrowserExecutor } from "../shared/types.js";
@@ -34,7 +37,16 @@ export function MakeCodePanel({
     return adapterRef.current;
   }, []);
 
-  const initialProjects = useMemo(() => async () => [], []);
+  // Seed the iframe with a project *we* own so the workspace header captured
+  // via onWorkspaceSave is one we know. Returning [] here causes MakeCode to
+  // fall back to whatever's in IndexedDB (or the home screen), and a later
+  // importProject writes to the workspace but doesn't reload the visible editor.
+  // Use makecode-embed's defaultMakeCodeProject so the editor opens on the
+  // standard on-start block instead of a blank workspace.
+  const initialProjects = useMemo(
+    () => async () => [defaultMakeCodeProject],
+    [],
+  );
 
   // Signal readiness on whichever fires first: onEditorContentLoaded (normal
   // browsers) or onWorkspaceLoaded (some headless / Playwright contexts where

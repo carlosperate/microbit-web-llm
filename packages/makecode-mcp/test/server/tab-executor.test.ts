@@ -187,7 +187,7 @@ describe("TabExecutor — stateless _from_code tools", () => {
     expect(d.setProject).toHaveBeenCalledOnce();
     const arg = d.setProject.mock.calls[0][0];
     expect(arg.text["main.ts"]).toBe('basic.showString("hi")');
-    expect(arg.text["pxt.json"]).toMatch(/"preferredEditor":\s*"tsprj"/);
+    expect(arg.text["pxt.json"]).toMatch(/"preferredEditor":\s*"blocksprj"/);
     expect(d.compile).toHaveBeenCalledOnce();
     expect(Buffer.from(out, "base64").toString("utf8")).toBe(
       ":020000040000FA\n:00000001FF\n",

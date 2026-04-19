@@ -19,6 +19,7 @@ interface FrameDriverLike {
     project: { header?: unknown; text?: Record<string, string> };
   }): Promise<void>;
   compile(): Promise<void>;
+  switchBlocks(): Promise<void>;
 }
 
 export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
@@ -79,6 +80,14 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
         text: project.text,
       },
     });
+    // Importing with an empty main.blocks lands the editor in JS view. Force
+    // blocks view so MakeCode decompiles main.ts into blocks for display.
+    try {
+      await this.driver.switchBlocks();
+    } catch {
+      // switchBlocks can reject if decompile fails (invalid TS). Leave the
+      // editor in whatever view importProject chose rather than propagating.
+    }
   }
 
   async compile(): Promise<DownloadEvent> {

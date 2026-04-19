@@ -50,7 +50,8 @@ describe("IframeExecutor — stateful tools", () => {
     expect(driver.setProject).toHaveBeenCalledOnce();
     const arg = driver.setProject.mock.calls[0][0];
     expect(arg.text["main.ts"]).toBe('basic.showString("hi")');
-    expect(arg.text["main.blocks"]).toBe("<blocks/>");
+    // Blocks must be cleared so the blocks view re-decompiles from the new main.ts.
+    expect(arg.text["main.blocks"]).toBe("");
     expect(arg.text["pxt.json"]).toBe('{"preferredEditor":"tsprj"}');
   });
 
