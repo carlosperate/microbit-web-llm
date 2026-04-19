@@ -1,13 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { tools, toolNames } from "../../src/shared/tools.ts";
+import {
+  browserTools,
+  browserToolNames,
+  serverTools,
+  serverToolNames,
+} from "../../src/shared/tools.ts";
 
-describe("tools", () => {
-  it("exports exactly 8 tools", () => {
-    expect(tools).toHaveLength(8);
+describe("browserTools", () => {
+  // The browser target exposes the iframe directly as the session, so the
+  // tool list does not include start_session / end_session and no tool
+  // carries a session_id parameter.
+
+  it("exports exactly 6 tools", () => {
+    expect(browserTools).toHaveLength(6);
   });
 
   it("every tool is an OpenAI function-calling descriptor", () => {
-    for (const tool of tools) {
+    for (const tool of browserTools) {
       expect(tool.type).toBe("function");
       expect(typeof tool.function.name).toBe("string");
       expect(typeof tool.function.description).toBe("string");
@@ -19,8 +28,84 @@ describe("tools", () => {
   });
 
   it("contains exactly the expected tool names", () => {
-    const names = tools.map((t) => t.function.name).sort();
-    expect(names).toEqual(
+    expect(browserTools.map((t) => t.function.name).sort()).toEqual(
+      [
+        "get_current_code",
+        "set_code",
+        "get_blocks_svg",
+        "get_hex_file",
+        "get_blocks_svg_from_code",
+        "get_hex_file_from_code",
+      ].sort(),
+    );
+  });
+
+  it("browserToolNames matches the browserTools array", () => {
+    expect(browserToolNames.sort()).toEqual(
+      browserTools.map((t) => t.function.name).sort(),
+    );
+  });
+
+  it("does NOT include start_session or end_session", () => {
+    const names = browserTools.map((t) => t.function.name);
+    expect(names).not.toContain("start_session");
+    expect(names).not.toContain("end_session");
+  });
+
+  it("no browser tool takes a session_id parameter", () => {
+    for (const tool of browserTools) {
+      expect(tool.function.parameters.properties).not.toHaveProperty("session_id");
+      expect(tool.function.parameters.required).not.toContain("session_id");
+    }
+  });
+
+  it.each(["get_current_code", "get_blocks_svg", "get_hex_file"])(
+    "stateful tool %s takes no arguments",
+    (name) => {
+      const t = browserTools.find((x) => x.function.name === name)!;
+      expect(t.function.parameters.required).toEqual([]);
+      expect(Object.keys(t.function.parameters.properties)).toEqual([]);
+    },
+  );
+
+  it("set_code requires only `code`", () => {
+    const t = browserTools.find((x) => x.function.name === "set_code")!;
+    expect(t.function.parameters.required).toEqual(["code"]);
+    expect(t.function.parameters.properties).toHaveProperty("code");
+    expect(t.function.parameters.properties).not.toHaveProperty("session_id");
+  });
+
+  it.each(["get_blocks_svg_from_code", "get_hex_file_from_code"])(
+    "stateless tool %s requires only `code`",
+    (name) => {
+      const t = browserTools.find((x) => x.function.name === name)!;
+      expect(t.function.parameters.required).toEqual(["code"]);
+      expect(t.function.parameters.properties).toHaveProperty("code");
+      expect(t.function.parameters.properties).not.toHaveProperty("session_id");
+    },
+  );
+
+  it("set_code description hints at natural follow-ups", () => {
+    const t = browserTools.find((x) => x.function.name === "set_code")!;
+    expect(t.function.description).toMatch(/get_blocks_svg|get_hex_file/);
+  });
+
+  it("get_hex_file_from_code tells the caller it is unsupported on browser", () => {
+    const t = browserTools.find((x) => x.function.name === "get_hex_file_from_code")!;
+    expect(t.function.description).toMatch(/not supported|browser/i);
+  });
+});
+
+describe("serverTools", () => {
+  // The server target can serve many LLM clients from a single process, so
+  // sessions are first-class.
+
+  it("exports exactly 8 tools", () => {
+    expect(serverTools).toHaveLength(8);
+  });
+
+  it("contains exactly the expected tool names", () => {
+    expect(serverTools.map((t) => t.function.name).sort()).toEqual(
       [
         "start_session",
         "end_session",
@@ -34,12 +119,14 @@ describe("tools", () => {
     );
   });
 
-  it("toolNames matches the tools array", () => {
-    expect(toolNames.sort()).toEqual(tools.map((t) => t.function.name).sort());
+  it("serverToolNames matches the serverTools array", () => {
+    expect(serverToolNames.sort()).toEqual(
+      serverTools.map((t) => t.function.name).sort(),
+    );
   });
 
   it("start_session takes no required args", () => {
-    const t = tools.find((x) => x.function.name === "start_session")!;
+    const t = serverTools.find((x) => x.function.name === "start_session")!;
     expect(t.function.parameters.required).toEqual([]);
   });
 
@@ -49,17 +136,13 @@ describe("tools", () => {
     "get_blocks_svg",
     "get_hex_file",
   ])("stateful tool %s requires session_id only", (name) => {
-    const t = tools.find((x) => x.function.name === name)!;
+    const t = serverTools.find((x) => x.function.name === name)!;
     expect(t.function.parameters.required).toEqual(["session_id"]);
     expect(t.function.parameters.properties).toHaveProperty("session_id");
-    expect(
-      (t.function.parameters.properties as Record<string, { type: string }>)
-        .session_id.type,
-    ).toBe("string");
   });
 
   it("set_code requires session_id and code", () => {
-    const t = tools.find((x) => x.function.name === "set_code")!;
+    const t = serverTools.find((x) => x.function.name === "set_code")!;
     expect(t.function.parameters.required.sort()).toEqual(
       ["code", "session_id"].sort(),
     );
@@ -68,9 +151,24 @@ describe("tools", () => {
   it.each(["get_blocks_svg_from_code", "get_hex_file_from_code"])(
     "session-less tool %s requires only code",
     (name) => {
-      const t = tools.find((x) => x.function.name === name)!;
+      const t = serverTools.find((x) => x.function.name === name)!;
       expect(t.function.parameters.required).toEqual(["code"]);
       expect(t.function.parameters.properties).not.toHaveProperty("session_id");
     },
   );
+
+  describe("workflow guidance embedded in descriptions", () => {
+    it("start_session tells the model not to stop after this call", () => {
+      const t = serverTools.find((x) => x.function.name === "start_session")!;
+      expect(t.function.description).toMatch(
+        /continue|do not stop|proceed|follow[- ]?up/i,
+      );
+      expect(t.function.description).toMatch(/set_code|stateful/i);
+    });
+
+    it("set_code suggests a natural follow-up tool", () => {
+      const t = serverTools.find((x) => x.function.name === "set_code")!;
+      expect(t.function.description).toMatch(/get_blocks_svg|get_hex_file/);
+    });
+  });
 });

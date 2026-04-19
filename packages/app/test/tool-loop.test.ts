@@ -1,12 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { runToolLoop } from "../src/chat/tool-loop.js";
 import type { ChatCompletionFn, StreamChunk } from "../src/chat/tool-loop.js";
-import type { MakeCodeExecutor } from "makecode-mcp/browser";
+import type { BrowserExecutor } from "makecode-mcp/browser";
 
-function makeExecutor(overrides: Partial<MakeCodeExecutor> = {}): MakeCodeExecutor {
+function makeExecutor(overrides: Partial<BrowserExecutor> = {}): BrowserExecutor {
   return {
-    startSession: vi.fn(async () => ({ session_id: "sid-1" })),
-    endSession: vi.fn(async () => {}),
     getCurrentCode: vi.fn(async () => ""),
     setCode: vi.fn(async () => {}),
     getBlocksSvg: vi.fn(async () => "<svg></svg>"),
@@ -17,7 +15,10 @@ function makeExecutor(overrides: Partial<MakeCodeExecutor> = {}): MakeCodeExecut
   };
 }
 
-function chunk(delta: Partial<StreamChunk["choices"][0]["delta"]>, finish_reason: StreamChunk["choices"][0]["finish_reason"] = null): StreamChunk {
+function chunk(
+  delta: Partial<StreamChunk["choices"][0]["delta"]>,
+  finish_reason: StreamChunk["choices"][0]["finish_reason"] = null,
+): StreamChunk {
   return { choices: [{ delta, finish_reason }] };
 }
 
@@ -53,7 +54,15 @@ describe("runToolLoop", () => {
       calls.push(messages);
       if (calls.length === 1) {
         return asStream([
-          chunk({ tool_calls: [{ index: 0, id: "call-1", function: { name: "start_session", arguments: "{}" } }] }),
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-1",
+                function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' },
+              },
+            ],
+          }),
           chunk({}, "tool_calls"),
         ]);
       }
@@ -64,20 +73,22 @@ describe("runToolLoop", () => {
     for await (const ev of runToolLoop({
       completion: engine,
       executor,
-      messages: [{ role: "user", content: "start" }],
+      messages: [{ role: "user", content: "write a program" }],
       tools: [],
       signal: new AbortController().signal,
     })) {
       events.push(ev);
     }
 
-    expect(executor.startSession).toHaveBeenCalledOnce();
+    expect(executor.setCode).toHaveBeenCalledWith("basic.showNumber(1)");
     expect(calls).toHaveLength(2);
     const secondCallHistory = calls[1];
-    // second call must include the assistant tool_call message AND the tool result
-    expect(secondCallHistory.some((m: any) => m.role === "assistant" && m.tool_calls)).toBe(true);
-    expect(secondCallHistory.some((m: any) => m.role === "tool" && m.tool_call_id === "call-1")).toBe(true);
-    // Final text delta is streamed to caller
+    expect(
+      secondCallHistory.some((m: any) => m.role === "assistant" && m.tool_calls),
+    ).toBe(true);
+    expect(
+      secondCallHistory.some((m: any) => m.role === "tool" && m.tool_call_id === "call-1"),
+    ).toBe(true);
     expect(events.filter((e) => e.type === "text-delta").map((e) => e.delta).join("")).toBe("done");
   });
 
@@ -90,8 +101,8 @@ describe("runToolLoop", () => {
         return asStream([
           chunk({
             tool_calls: [
-              { index: 0, id: "a", function: { name: "get_current_code", arguments: '{"session_id":"s"}' } },
-              { index: 1, id: "b", function: { name: "get_blocks_svg", arguments: '{"session_id":"s"}' } },
+              { index: 0, id: "a", function: { name: "get_current_code", arguments: "{}" } },
+              { index: 1, id: "b", function: { name: "get_blocks_svg", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -112,10 +123,50 @@ describe("runToolLoop", () => {
     expect(executor.getBlocksSvg).toHaveBeenCalledOnce();
   });
 
+  it("passes get_blocks_svg_from_code through as a stateless render", async () => {
+    // Useful for previewing a snippet while the user is still discussing
+    // changes, before anything is loaded into the editor.
+    const executor = makeExecutor({
+      getBlocksSvgFromCode: vi.fn(async (c: string) => `<svg>${c}</svg>`),
+    });
+    let turn = 0;
+    const engine: ChatCompletionFn = async () => {
+      turn++;
+      if (turn === 1) {
+        return asStream([
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "p1",
+                function: { name: "get_blocks_svg_from_code", arguments: '{"code":"basic.showNumber(42)"}' },
+              },
+            ],
+          }),
+          chunk({}, "tool_calls"),
+        ]);
+      }
+      return asStream([chunk({ content: "here's a preview" }), chunk({}, "stop")]);
+    };
+    for await (const _ of runToolLoop({
+      completion: engine,
+      executor,
+      messages: [{ role: "user", content: "show me what this looks like" }],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      // drain
+    }
+    expect(executor.getBlocksSvgFromCode).toHaveBeenCalledWith("basic.showNumber(42)");
+    expect(executor.setCode).not.toHaveBeenCalled();
+  });
+
   it("returns a structured tool error when the executor throws", async () => {
     const executor = makeExecutor({
       getBlocksSvg: vi.fn(async () => {
-        throw new Error("No code loaded in the editor. Call set_code first to load code before requesting get_blocks_svg.");
+        throw new Error(
+          "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_svg.",
+        );
       }),
     });
     const capturedHistory: any[][] = [];
@@ -125,7 +176,11 @@ describe("runToolLoop", () => {
       turn++;
       if (turn === 1) {
         return asStream([
-          chunk({ tool_calls: [{ index: 0, id: "c", function: { name: "get_blocks_svg", arguments: '{"session_id":"s"}' } }] }),
+          chunk({
+            tool_calls: [
+              { index: 0, id: "c", function: { name: "get_blocks_svg", arguments: "{}" } },
+            ],
+          }),
           chunk({}, "tool_calls"),
         ]);
       }
@@ -145,18 +200,27 @@ describe("runToolLoop", () => {
     expect(toolMsg.content).toMatch(/No code loaded/);
   });
 
-  it("re-invokes with empty tools when the model signals done via empty tool_calls", async () => {
-    // Hermes-2-Pro-style done signal: schema-constrained output of `[]` produces
-    // finish_reason="tool_calls" with no actual calls. The loop must follow up
-    // once with tools disabled to let the model emit a plain-text answer.
+  it("re-invokes with empty tools when the model signals done via [] after substantive work", async () => {
+    // Hermes-2-Pro-style done signal: schema-constrained output of `[]` with
+    // finish_reason="tool_calls" means "nothing more to do". After substantive
+    // work has happened, the loop follows up once with tools disabled so the
+    // model can emit a plain-text wrap-up.
     const capturedToolsArgs: any[] = [];
     let turn = 0;
     const engine: ChatCompletionFn = async ({ tools }) => {
       capturedToolsArgs.push(tools);
       turn++;
       if (turn === 1) {
-        return asStream([chunk({}, "tool_calls")]);
+        return asStream([
+          chunk({
+            tool_calls: [
+              { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"x"}' } },
+            ],
+          }),
+          chunk({}, "tool_calls"),
+        ]);
       }
+      if (turn === 2) return asStream([chunk({}, "tool_calls")]);
       return asStream([chunk({ content: "All done!" }), chunk({}, "stop")]);
     };
     const events: any[] = [];
@@ -164,21 +228,155 @@ describe("runToolLoop", () => {
       completion: engine,
       executor: makeExecutor(),
       messages: [{ role: "user", content: "go" }],
-      tools: [{ type: "function", function: { name: "start_session", description: "x", parameters: { type: "object", properties: {} } } }] as any,
+      tools: [
+        {
+          type: "function",
+          function: { name: "set_code", description: "x", parameters: { type: "object", properties: {} } },
+        },
+      ] as any,
       signal: new AbortController().signal,
     })) {
       events.push(ev);
     }
-    expect(capturedToolsArgs).toHaveLength(2);
+    expect(capturedToolsArgs).toHaveLength(3);
     expect(capturedToolsArgs[0]).toHaveLength(1);
-    expect(capturedToolsArgs[1]).toEqual([]);
+    expect(capturedToolsArgs[1]).toHaveLength(1);
+    expect(capturedToolsArgs[2]).toEqual([]);
     expect(events.filter((e) => e.type === "text-delta").map((e) => e.delta).join("")).toBe("All done!");
+  });
+
+  describe("stall recovery", () => {
+    it("retries once with a system nudge when the model stalls on turn 1 (no tool calls yet)", async () => {
+      // Observed with Qwen + grammar-constrained tool calling: user asks for
+      // something actionable, model emits [] on turn 1 instead of calling a
+      // tool. Without retry, the fallback produces plain-text output that
+      // describes tool calls inside a code block (unrunnable).
+      const executor = makeExecutor();
+      const callsReceived: any[] = [];
+      let turn = 0;
+      const engine: ChatCompletionFn = async (params) => {
+        callsReceived.push({ messages: params.messages, tools: params.tools });
+        turn++;
+        if (turn === 1) {
+          // Stall on turn 1 — no tool calls at all.
+          return asStream([chunk({}, "tool_calls")]);
+        }
+        if (turn === 2) {
+          return asStream([
+            chunk({
+              tool_calls: [
+                { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"basic.showString(\\"Jerry\\")"}' } },
+              ],
+            }),
+            chunk({}, "tool_calls"),
+          ]);
+        }
+        return asStream([chunk({ content: "done" }), chunk({}, "stop")]);
+      };
+      const events: any[] = [];
+      for await (const ev of runToolLoop({
+        completion: engine,
+        executor,
+        messages: [{ role: "user", content: "scroll Jerry" }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+          },
+        ] as any,
+        signal: new AbortController().signal,
+      })) {
+        events.push(ev);
+      }
+      // Turn 2 still has tools (retry, not fallback).
+      expect(callsReceived[1]?.tools.length).toBeGreaterThan(0);
+      // Turn 2 received a system reminder after the turn-1 stall.
+      const turn2Systems = callsReceived[1].messages.filter((m: any) => m.role === "system");
+      expect(turn2Systems.length).toBeGreaterThanOrEqual(1);
+      expect(turn2Systems[turn2Systems.length - 1].content).toMatch(/tool|plain text|workflow/i);
+      expect(executor.setCode).toHaveBeenCalledWith('basic.showString("Jerry")');
+    });
+
+    it("falls back to plain-text reply when the stall persists after the retry", async () => {
+      const sawEmptyTools: boolean[] = [];
+      let turn = 0;
+      const engine: ChatCompletionFn = async ({ tools }) => {
+        sawEmptyTools.push(tools.length === 0);
+        turn++;
+        if (turn === 1 || turn === 2) return asStream([chunk({}, "tool_calls")]);
+        return asStream([chunk({ content: "sorry, I can't." }), chunk({}, "stop")]);
+      };
+      const events: any[] = [];
+      for await (const ev of runToolLoop({
+        completion: engine,
+        executor: makeExecutor(),
+        messages: [{ role: "user", content: "go" }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+          },
+        ] as any,
+        signal: new AbortController().signal,
+      })) {
+        events.push(ev);
+      }
+      // Turn 1 (initial stall) + turn 2 (retry) keep tools; turn 3 (plain-text
+      // fallback) is the first with tools disabled.
+      expect(sawEmptyTools.slice(0, 2).every((v) => v === false)).toBe(true);
+      expect(sawEmptyTools[2]).toBe(true);
+      expect(events.filter((e) => e.type === "text-delta").map((e) => e.delta).join("")).toBe("sorry, I can't.");
+    });
+
+    it("does not retry the stall if substantive work has already happened", async () => {
+      // Turn 1: set_code (substantive).
+      // Turn 2: []. No stall retry — proceed to tools-disabled text fallback.
+      const executor = makeExecutor();
+      let turn = 0;
+      const sawEmptyTools: boolean[] = [];
+      const engine: ChatCompletionFn = async ({ tools }) => {
+        sawEmptyTools.push(tools.length === 0);
+        turn++;
+        if (turn === 1) {
+          return asStream([
+            chunk({
+              tool_calls: [
+                { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"x"}' } },
+              ],
+            }),
+            chunk({}, "tool_calls"),
+          ]);
+        }
+        if (turn === 2) return asStream([chunk({}, "tool_calls")]);
+        return asStream([chunk({ content: "done" }), chunk({}, "stop")]);
+      };
+      for await (const _ of runToolLoop({
+        completion: engine,
+        executor,
+        messages: [{ role: "user", content: "go" }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+          },
+        ] as any,
+        signal: new AbortController().signal,
+      })) {
+        // drain
+      }
+      // Turn 3 is the tools-disabled fallback; no retry turn between.
+      expect(sawEmptyTools).toEqual([false, false, true]);
+    });
   });
 
   it("stops after maxSteps to avoid infinite loops", async () => {
     const engine: ChatCompletionFn = async () =>
       asStream([
-        chunk({ tool_calls: [{ index: 0, id: "x", function: { name: "get_current_code", arguments: '{"session_id":"s"}' } }] }),
+        chunk({
+          tool_calls: [
+            { index: 0, id: "x", function: { name: "get_current_code", arguments: "{}" } },
+          ],
+        }),
         chunk({}, "tool_calls"),
       ]);
     await expect(async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SessionError, isSessionError } from "../../src/shared/types.ts";
-import type { MakeCodeExecutor } from "../../src/shared/types.ts";
+import type { BrowserExecutor, ServerExecutor } from "../../src/shared/types.ts";
 
 describe("SessionError", () => {
   it("is an Error with a machine-readable code", () => {
@@ -24,9 +24,27 @@ describe("SessionError", () => {
   });
 });
 
-describe("MakeCodeExecutor interface (type-level)", () => {
-  it("has one method per tool; type-checks a mock implementation", () => {
-    const mock: MakeCodeExecutor = {
+describe("BrowserExecutor interface (type-level)", () => {
+  // Stateless — one iframe per executor. Methods take no session_id and there
+  // is no start/end lifecycle: the iframe itself is the session.
+  it("type-checks a mock implementation without any session methods", () => {
+    const mock: BrowserExecutor = {
+      getCurrentCode: async () => "",
+      setCode: async (_code: string) => {},
+      getBlocksSvg: async () => "<svg/>",
+      getHexFile: async () => "",
+      getBlocksSvgFromCode: async (_code: string) => "<svg/>",
+      getHexFileFromCode: async (_code: string) => "",
+    };
+    expect(typeof mock.setCode).toBe("function");
+  });
+});
+
+describe("ServerExecutor interface (type-level)", () => {
+  // Session-scoped — one MCP server can serve many clients. Stateful methods
+  // take session_id to pick the right puppeteer tab.
+  it("type-checks a mock implementation with full session lifecycle", () => {
+    const mock: ServerExecutor = {
       startSession: async () => ({ session_id: "abc" }),
       endSession: async (_sid: string) => {},
       getCurrentCode: async (_sid: string) => "",

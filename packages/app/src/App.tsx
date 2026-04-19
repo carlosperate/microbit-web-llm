@@ -1,11 +1,14 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react";
 import { MakeCodePanel } from "makecode-mcp/browser";
-import type { MakeCodeExecutor } from "makecode-mcp/browser";
+import type { BrowserExecutor } from "makecode-mcp/browser";
+import { createLogger, isLoggingEnabled } from "makecode-mcp/browser";
 import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
 import { loadWebLLM, isWebGPUSupported, MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+
+const log = createLogger("app");
 
 type ChatAdapter = ReturnType<typeof createChatAdapter>;
 
@@ -39,11 +42,12 @@ export function App(props: {
   // re-loading the same model id still counts as a new conversation.
   const [chatEpoch, setChatEpoch] = useState(0);
   const completionRef = useRef<ChatCompletionFn | null>(props.mockCompletion ?? null);
-  const executorRef = useRef<MakeCodeExecutor | null>(null);
+  const executorRef = useRef<BrowserExecutor | null>(null);
   const [executorReady, setExecutorReady] = useState(false);
 
   const loadModel = useCallback(async (modelId: ModelId) => {
     if (props.mockCompletion) return;
+    log.info("loadModel requested", { modelId });
     setLoadState({ status: "loading", progress: 0, text: "Starting…", modelId });
     try {
       completionRef.current = await loadWebLLM(
@@ -53,7 +57,9 @@ export function App(props: {
       setLoadedModelId(modelId);
       setChatEpoch((n) => n + 1);
       setLoadState({ status: "ready" });
+      log.info("model ready → chat thread remounted (new epoch)", { modelId });
     } catch (err) {
+      log.error("model load failed", err);
       completionRef.current = null;
       setLoadedModelId(null);
       setLoadState({ status: "error", error: err instanceof Error ? err : new Error(String(err)) });
@@ -79,9 +85,23 @@ export function App(props: {
     [ensureLoaded],
   );
 
-  const handleExecutorReady = useCallback((executor: MakeCodeExecutor) => {
+  const handleExecutorReady = useCallback((executor: BrowserExecutor) => {
+    log.info("MakeCode executor ready");
     executorRef.current = executor;
     setExecutorReady(true);
+  }, []);
+
+  useEffect(() => {
+    // Print a one-time banner so a user opening devtools sees where logs
+    // come from and how to silence them.
+    if (isLoggingEnabled()) {
+      // eslint-disable-next-line no-console
+      console.log(
+        "%c[mkcp]",
+        "color:#0ea5e9;font-weight:700",
+        "verbose logging ON. Disable with: localStorage.setItem('mkcp:log','0') then reload, or add ?mkcp-log=0 to the URL.",
+      );
+    }
   }, []);
 
   const modelLoaded = loadedModelId === selectedModelId && loadState.status === "ready";

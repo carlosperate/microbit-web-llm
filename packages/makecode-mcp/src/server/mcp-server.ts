@@ -3,18 +3,21 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { MakeCodeExecutor } from "../shared/types.js";
+import type { ServerExecutor } from "../shared/types.js";
 import { isSessionError } from "../shared/types.js";
-import { tools as TOOL_DESCRIPTORS } from "../shared/tools.js";
+import { serverTools as TOOL_DESCRIPTORS } from "../shared/tools.js";
+import { createLogger, preview } from "../shared/logger.js";
+
+const log = createLogger("mcp");
 
 export interface McpServerOptions {
-  executor: MakeCodeExecutor;
+  executor: ServerExecutor;
   name?: string;
   version?: string;
 }
 
 type ToolArgs = Record<string, unknown>;
-type Dispatch = (exec: MakeCodeExecutor, a: ToolArgs) => Promise<unknown>;
+type Dispatch = (exec: ServerExecutor, a: ToolArgs) => Promise<unknown>;
 
 const sid = (a: ToolArgs) => String(a.session_id ?? "");
 const code = (a: ToolArgs) => String(a.code ?? "");
@@ -56,23 +59,41 @@ export function buildMcpServer(options: McpServerOptions): Server {
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DESCRIPTORS.map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      inputSchema: t.function.parameters,
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    log.info("ListTools");
+    return {
+      tools: TOOL_DESCRIPTORS.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        inputSchema: t.function.parameters,
+      })),
+    };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const handler = dispatch[req.params.name];
-    if (!handler) return textResult({ error: `Unknown tool: ${req.params.name}` }, true);
+    const name = req.params.name;
+    const args = (req.params.arguments ?? {}) as ToolArgs;
+    log.info(`CallTool → ${name}`, { args: preview(args) });
+    const end = log.time(`CallTool ${name}`);
+    const handler = dispatch[name];
+    if (!handler) {
+      end();
+      log.warn(`unknown tool: ${name}`);
+      return textResult({ error: `Unknown tool: ${name}` }, true);
+    }
     try {
-      return textResult(
-        await handler(options.executor, (req.params.arguments ?? {}) as ToolArgs),
-      );
+      const result = textResult(await handler(options.executor, args));
+      end();
+      log.info(`CallTool ← ${name} ok`);
+      return result;
     } catch (err) {
+      end();
       const error = err instanceof Error ? err.message : String(err);
+      if (isSessionError(err)) {
+        log.warn(`CallTool ← ${name} session error`, { code: err.code, error });
+      } else {
+        log.error(`CallTool ← ${name} error`, error);
+      }
       return textResult(
         isSessionError(err) ? { error, code: err.code } : { error },
         true,
@@ -80,5 +101,6 @@ export function buildMcpServer(options: McpServerOptions): Server {
     }
   });
 
+  log.info("MCP server built", { tools: TOOL_DESCRIPTORS.length });
   return server;
 }

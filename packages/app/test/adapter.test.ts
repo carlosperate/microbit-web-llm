@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ThreadMessage } from "@assistant-ui/react";
-import type { MakeCodeExecutor } from "makecode-mcp/browser";
+import type { BrowserExecutor } from "makecode-mcp/browser";
 import { convertMessages, createChatAdapter } from "../src/chat/adapter.js";
 import type { ChatCompletionFn, StreamChunk } from "../src/chat/tool-loop.js";
 
@@ -26,10 +26,8 @@ function assistantMsg(parts: any[]): ThreadMessage {
   } as unknown as ThreadMessage;
 }
 
-function makeExecutor(overrides: Partial<MakeCodeExecutor> = {}): MakeCodeExecutor {
+function makeExecutor(overrides: Partial<BrowserExecutor> = {}): BrowserExecutor {
   return {
-    startSession: vi.fn(async () => ({ session_id: "sid-1" })),
-    endSession: vi.fn(async () => {}),
     getCurrentCode: vi.fn(async () => ""),
     setCode: vi.fn(async () => {}),
     getBlocksSvg: vi.fn(async () => "<svg/>"),
@@ -62,8 +60,8 @@ describe("convertMessages", () => {
           type: "tool-call",
           toolCallId: "c1",
           toolName: "set_code",
-          args: { session_id: "s", code: "x" },
-          argsText: '{"session_id":"s","code":"x"}',
+          args: { code: "x" },
+          argsText: '{"code":"x"}',
           result: '{"ok":true}',
         },
       ]),
@@ -121,13 +119,15 @@ describe("createChatAdapter", () => {
   });
 
   it("emits a tool-call part with args and result when the model invokes a tool", async () => {
-    const executor = makeExecutor();
+    const executor = makeExecutor({
+      setCode: vi.fn(async () => {}),
+    });
     let turn = 0;
     const completion: ChatCompletionFn = async () => {
       turn++;
       if (turn === 1) {
         return asStream([
-          chunk({ tool_calls: [{ index: 0, id: "t1", function: { name: "start_session", arguments: "{}" } }] }),
+          chunk({ tool_calls: [{ index: 0, id: "t1", function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' } }] }),
           chunk({}, "tool_calls"),
         ]);
       }
@@ -139,11 +139,10 @@ describe("createChatAdapter", () => {
     const toolPart = final.content.find((p: any) => p.type === "tool-call");
     expect(toolPart).toMatchObject({
       toolCallId: "t1",
-      toolName: "start_session",
+      toolName: "set_code",
       isError: false,
     });
-    expect(toolPart.result).toContain("session_id");
-    expect(executor.startSession).toHaveBeenCalledOnce();
+    expect(executor.setCode).toHaveBeenCalledWith("basic.showNumber(1)");
   });
 
   it("reports error status without duplicating the message in content", async () => {

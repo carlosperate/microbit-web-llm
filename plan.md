@@ -12,7 +12,10 @@ A monorepo containing two packages:
 
 - **Target user**: classroom (educators / students). POC-stage, so a large, capable model (Qwen2.5-Coder 7B Instruct, ~4–5GB first load) is acceptable for v1. Model-size optimisation is a post-POC concern. WebLLM gates `tools` behind an allowlist and only auto-applies its Hermes-2-Pro transformation to `Hermes-2-Pro-*` IDs; Qwen is made to work by patching the allowlist and applying the same grammar-constrained JSON-array transformation manually in `webllm-engine.ts`.
 - **MCP server is in scope for v1** (not deferred).
-- **Stateful tools are gated by explicit session lifecycle.** Two new tools — `start_session` and `end_session` — are added. All tools are available on both targets; stateful tools require an active session. The LLM is responsible for calling `start_session` before and `end_session` after. Exact semantics (browser no-op vs editor reset; server tab-per-session) finalised in Phase 2.
+
+## Decisions (2026-04-19)
+
+- **Sessions live in the library, not the LLM contract for the browser target.** The browser target exposes a stateless 6-tool surface (no `session_id`, no `start_session` / `end_session`) — one `IframeExecutor` is bound to one iframe, and the iframe itself is the session. The server target keeps the 8-tool surface with session lifecycle because a single MCP process can serve many clients. This deletes the app-side session plumbing (knownSessionId, $SESSION_ID placeholder replacement, start_session-first batch ordering, next-step tool-result enrichment) — the remaining Qwen workaround is a single generic stall retry before plain-text fallback. The two surfaces are defined by distinct `BrowserExecutor` / `ServerExecutor` interfaces with distinct `browserTools` / `serverTools` schemas.
 
 
 ## Monorepo Structure
@@ -48,26 +51,26 @@ A monorepo containing two packages:
 
 Defines the tool schemas as plain JSON-serialisable objects in OpenAI function-calling format. No runtime dependencies. Both the browser and server import from here.
 
-**Tools:**
+**Tools (two surfaces):**
 
-| Tool | Arguments | Returns | Session required |
-|------|-----------|---------|------------------|
-| `start_session` | none | `{ session_id: string }` | — |
-| `end_session` | `session_id: string` | void | yes |
-| `get_current_code` | `session_id: string` | TypeScript string | yes |
-| `set_code` | `session_id: string, code: string` | void | yes |
-| `get_blocks_svg` | `session_id: string` | SVG string | yes |
-| `get_hex_file` | `session_id: string` | base64 string | yes |
-| `get_blocks_svg_from_code` | `code: string` | SVG string | no |
-| `get_hex_file_from_code` | `code: string` | base64 string | no |
+| Tool | Browser args | Server args | Returns |
+|------|--------------|-------------|---------|
+| `start_session` | *(server only)* | none | `{ session_id }` |
+| `end_session` | *(server only)* | `session_id` | void |
+| `get_current_code` | *(no args)* | `session_id` | TypeScript string |
+| `set_code` | `code` | `session_id, code` | void |
+| `get_blocks_svg` | *(no args)* | `session_id` | SVG string |
+| `get_hex_file` | *(no args, browser throws "not supported" for hex path? no — `get_hex_file` works on browser; only `get_hex_file_from_code` is unsupported)* | `session_id` | base64 string |
+| `get_blocks_svg_from_code` | `code` | `code` | SVG string |
+| `get_hex_file_from_code` | *(throws: browser cannot compile without mutating the editor)* | `code` | base64 string |
 
-All eight tools are registered by both targets. `start_session` returns an opaque `session_id` that the LLM must pass back on every subsequent stateful call. Stateful tools return a structured error if `session_id` is missing, unknown, or expired, directing the LLM to call `start_session` first.
+Browser surface: 6 tools (no sessions). Server surface: 8 tools (`start_session` / `end_session` plus the 6 operations with a `session_id` on the stateful ones).
 
-Tool descriptions include explicit guidance for the LLM — for example, `get_blocks_svg` states that code must have been loaded via `set_code` first, and returns a descriptive error if the editor is empty.
+Tool descriptions include explicit guidance for the LLM — for example, `get_blocks_svg` states that code must have been loaded via `set_code` first, and returns a descriptive error if the editor is empty. Server-side `start_session` / `set_code` descriptions also hint at natural follow-ups since MCP clients like Claude Desktop do not benefit from our app's stall-retry.
 
 ### Browser (`src/browser/`)
 
-**`IframeExecutor`** — implements all eight tools against a live MakeCode iframe by wrapping `@microbit/makecode-embed/vanilla`'s `MakeCodeFrameDriver` (and `createMakeCodeRenderBlocks` for the render-only path). Never hand-rolls `postMessage`.
+**`IframeExecutor`** — implements `BrowserExecutor` (6 stateless methods) against a live MakeCode iframe by wrapping `@microbit/makecode-embed/vanilla`'s `MakeCodeFrameDriver` (and `createMakeCodeRenderBlocks` for the render-only path). Never hand-rolls `postMessage`. The instance's lifetime is the session — state lives in the iframe.
 
 **`MakeCodePanel`** — a React component built on `@microbit/makecode-embed/react`, exposing an `IframeExecutor` instance via an `onExecutorReady` callback prop. The host app mounts this component and gets back an executor it can pass to the chat panel.
 
@@ -80,11 +83,9 @@ Implementation notes:
 
 **`BrowserPool`** — manages one persistent Puppeteer browser process. Exposes a `withTab(fn)` method that opens a fresh MakeCode tab, runs the callback, then closes the tab. The browser stays alive between calls.
 
-**`TabExecutor`** — implements session-scoped state by keeping a Puppeteer tab open for the lifetime of the session. `start_session` allocates a tab, generates a `session_id` (UUID), stores `session_id → page` in an in-memory map, and returns the id. Subsequent stateful calls look up the page by `session_id`; unknown ids return a structured error. `end_session` closes the tab and evicts the entry. `_from_code` tools use a transient tab via `BrowserPool.withTab`. Idle sessions are evicted after a configurable TTL (default 30 min) to bound resource use.
+**`TabExecutor`** — implements `ServerExecutor` with session-scoped state by keeping a Puppeteer tab open for the lifetime of the session. `start_session` allocates a tab, generates a `session_id` (UUID), stores `session_id → page` in an in-memory map, and returns the id. Subsequent stateful calls look up the page by `session_id`; unknown ids return a structured error. `end_session` closes the tab and evicts the entry. `_from_code` tools use a transient tab via `BrowserPool.withTab`. Idle sessions are evicted after a configurable TTL (default 30 min) to bound resource use.
 
-On the **browser target**, `IframeExecutor` still honours the same protocol — `start_session` returns a `session_id` and all stateful tools validate it — but since there is only one iframe per page, the executor rejects any call whose `session_id` does not match the currently-active one. This keeps the tool contract identical across targets.
-
-**`McpServer`** — sets up an MCP server using `@modelcontextprotocol/sdk` with SSE or stdio transport. Registers all eight tools and delegates execution to `TabExecutor`.
+**`McpServer`** — sets up an MCP server using `@modelcontextprotocol/sdk` with SSE or stdio transport. Registers the 8 server tools and delegates execution to `TabExecutor`.
 
 Key things to verify with a Puppeteer spike before committing to implementation:
 - Whether blocks SVG is accessible in the DOM or requires a `postMessage` round-trip
@@ -104,7 +105,7 @@ Split-pane: chat panel on the left (~35% width), MakeCode editor on the right (~
 - Powered by WebLLM running fully in-browser on WebGPU (model: Qwen2.5-Coder 7B Instruct, ~4–5GB cached after first load; tool-calling enabled by applying Hermes-2-Pro's grammar-constrained JSON-array transformation manually)
 - OpenAI-compatible function-calling API — the tool schemas from `makecode-mcp/shared` are passed directly as the `tools` array
 - Agentic tool-call loop: the LLM may call multiple tools before producing a final text response
-- System prompt injects context: the LLM is a micro:bit coding assistant, session lifecycle rules, the editor maintains state across the conversation while a session is open, `set_code` followed by `get_blocks_svg` is a valid multi-turn pattern
+- System prompt injects context: the LLM is a micro:bit coding assistant, the editor is stateful across the conversation, `set_code` followed by `get_blocks_svg` is a valid multi-turn pattern, `get_blocks_svg_from_code` is a stateless preview for snippets under discussion. No session lifecycle — the iframe is the session.
 - Streaming token output
 
 ### Tool Execution in the App
@@ -179,7 +180,9 @@ Spike scripts live in `spike/` at the repo root. They are throwaway code — not
 6. End-to-end test — `test/chat.e2e.ts`: scripted transcript (`start_session` → `set_code` → `get_blocks_svg` → text reply) via `window.__mockChatCompletion` injected by Playwright
 7. WebGPU gate + model-loading overlay — `LoadOverlay` renders unsupported / loading / error states; Qwen 7B is ~4–5 GB on first run
 
-Unit tests (Vitest): `test/system-prompt.test.ts`, `test/tool-loop.test.ts` (parallel calls, error propagation, max-steps, history shape). All written before implementation.
+Unit tests (Vitest): `test/system-prompt.test.ts`, `test/tool-loop.test.ts` (parallel calls, error propagation, max-steps, history shape, stall retry). All written before implementation.
+
+**Stall retry (residual Qwen workaround)**: when the grammar-constrained model emits `[]` before any substantive tool has been called (often describing the tool workflow in a code block instead of calling it), `runToolLoop` appends a `STALL_REMINDER` system message and retries once with tools still enabled before falling back to the plain-text branch. The substantive-call check covers `set_code`, `get_current_code`, `get_blocks_svg`, `get_hex_file`, and the `_from_code` variants. Retry fires at most once per run. With sessions removed from the browser surface, the earlier three-layer machinery (next-step enrichment, session-id injection, batch ordering) is no longer needed.
 
 Use `assistant-ui` to create the Chat interface.
 Read the docs, this is very important: https://www.assistant-ui.com/docs
@@ -210,5 +213,5 @@ Shared extraction: default MakeCode project files (`pxt.json` with `preferredEdi
 
 1. **[decided]** Blocks SVG accessibility — resolved by Spike 1: `createMakeCodeRenderBlocks` from `@microbit/makecode-embed/vanilla` works headlessly.
 2. **[decided]** Hex interception via Puppeteer — resolved by Spike 2: `MakeCodeFrameDriver` + `onDownload` works with `controller=2`.
-3. **[open]** `start_session` / `end_session` semantics on the browser target — no-op vs editor reset on start; clear editor on end. Decide in Phase 2.
+3. **[decided 2026-04-19]** Session lifecycle on the browser target — removed entirely. The iframe is the session; the browser surface is 6 stateless tools. Sessions remain on the server surface only.
 4. **[decided for v1]** MCP transport — stdio is implemented in `bin.ts` (targets Claude Desktop / MCP Inspector). SSE/streamable HTTP deferred; the SDK supports it so adding a second transport is a thin wrapper around `buildMcpServer(...)`.

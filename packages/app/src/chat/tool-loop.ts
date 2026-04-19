@@ -1,5 +1,8 @@
-import type { MakeCodeExecutor } from "makecode-mcp/browser";
+import type { BrowserExecutor } from "makecode-mcp/browser";
 import type { ToolDescriptor } from "makecode-mcp/browser";
+import { createLogger, preview } from "makecode-mcp/browser";
+
+const log = createLogger("tool-loop");
 
 export type OpenAIMessage =
   | { role: "system"; content: string }
@@ -44,7 +47,7 @@ export type ToolLoopEvent =
 
 export interface ToolLoopOptions {
   completion: ChatCompletionFn;
-  executor: MakeCodeExecutor;
+  executor: BrowserExecutor;
   messages: OpenAIMessage[];
   tools: ToolDescriptor[];
   signal: AbortSignal;
@@ -56,6 +59,26 @@ interface PendingToolCall {
   name: string;
   arguments: string;
 }
+
+// Stateful tools (acting on the editor) that count as actually advancing the
+// user's request. Used by the stall-retry heuristic: if the model emits []
+// before any of these have fired, we nudge it once instead of falling back to
+// a tools-disabled plain-text reply.
+const SUBSTANTIVE_TOOLS = new Set([
+  "set_code",
+  "get_current_code",
+  "get_blocks_svg",
+  "get_hex_file",
+  "get_blocks_svg_from_code",
+  "get_hex_file_from_code",
+]);
+
+// Fires once if the model stalls (emits []) before doing any substantive work.
+// Typical failure mode: user asks for a program, model replies in plain text
+// describing the tool calls inside a TypeScript code block instead of
+// actually calling them.
+const STALL_REMINDER =
+  "[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: set_code with the program, then get_blocks_svg to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.";
 
 function accumulateToolCalls(
   acc: Map<number, PendingToolCall>,
@@ -72,27 +95,20 @@ function accumulateToolCalls(
 }
 
 async function dispatchTool(
-  executor: MakeCodeExecutor,
+  executor: BrowserExecutor,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
   switch (name) {
-    case "start_session": {
-      const r = await executor.startSession();
-      return JSON.stringify(r);
-    }
-    case "end_session":
-      await executor.endSession(args.session_id as string);
-      return JSON.stringify({ ok: true });
     case "get_current_code":
-      return await executor.getCurrentCode(args.session_id as string);
+      return await executor.getCurrentCode();
     case "set_code":
-      await executor.setCode(args.session_id as string, args.code as string);
+      await executor.setCode(args.code as string);
       return JSON.stringify({ ok: true });
     case "get_blocks_svg":
-      return await executor.getBlocksSvg(args.session_id as string);
+      return await executor.getBlocksSvg();
     case "get_hex_file":
-      return await executor.getHexFile(args.session_id as string);
+      return await executor.getHexFile();
     case "get_blocks_svg_from_code":
       return await executor.getBlocksSvgFromCode(args.code as string);
     case "get_hex_file_from_code":
@@ -111,136 +127,141 @@ function parseArgs(raw: string): Record<string, unknown> {
   }
 }
 
-/** Replace a missing or placeholder session_id (e.g. "$SESSION_ID") with the
- * last known real one.  The model sometimes batches start_session with a
- * subsequent stateful call before it can know the returned id, or it emits a
- * literal placeholder string instead of the actual UUID. */
-function injectSessionId(
-  args: Record<string, unknown>,
-  knownSessionId: string | undefined,
-): Record<string, unknown> {
-  if (!knownSessionId) return args;
-  const sid = args.session_id;
-  if (!sid || typeof sid !== "string" || sid.startsWith("$")) {
-    return { ...args, session_id: knownSessionId };
-  }
-  return args;
+function historyHasSubstantiveCall(history: OpenAIMessage[]): boolean {
+  return history.some(
+    (m) =>
+      m.role === "assistant" &&
+      m.tool_calls?.some((t) => SUBSTANTIVE_TOOLS.has(t.function.name)),
+  );
 }
 
 export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoopEvent> {
   const { completion, executor, tools, signal } = opts;
   const maxSteps = opts.maxSteps ?? 10;
   const history: OpenAIMessage[] = [...opts.messages];
-  // Tracks the most recently acquired session_id so it can be injected into
-  // calls that arrive without one (model batching) or with a placeholder.
-  let knownSessionId: string | undefined;
+  // Fires at most once per run: when the model stalls (emits []) before doing
+  // any substantive work, inject a reminder and retry instead of falling back
+  // to a tools-disabled plain-text reply.
+  let stallRetried = false;
 
-  for (let step = 0; step < maxSteps; step++) {
-    const stream = await completion({ messages: history, tools, signal });
-    const pending = new Map<number, PendingToolCall>();
-    let assistantText = "";
-    let finish: StreamChunk["choices"][0]["finish_reason"] = null;
+  log.group(`runToolLoop (maxSteps=${maxSteps}, tools=${tools.length}, history=${history.length})`);
+  try {
+    for (let step = 0; step < maxSteps; step++) {
+      log.info(`step ${step + 1}: requesting completion`, {
+        historyLen: history.length,
+        lastRole: history[history.length - 1]?.role,
+      });
+      const endStep = log.time(`step ${step + 1} stream`);
+      const stream = await completion({ messages: history, tools, signal });
+      const pending = new Map<number, PendingToolCall>();
+      let assistantText = "";
+      let finish: StreamChunk["choices"][0]["finish_reason"] = null;
 
-    for await (const chunk of stream) {
-      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-      const choice = chunk.choices[0];
-      if (!choice) continue;
-      const { delta } = choice;
-      if (delta.content) {
-        assistantText += delta.content;
-        yield { type: "text-delta", delta: delta.content };
-      }
-      if (delta.tool_calls) accumulateToolCalls(pending, delta.tool_calls);
-      if (choice.finish_reason) finish = choice.finish_reason;
-    }
-
-    if (finish === "tool_calls" && pending.size === 0) {
-      // Hermes-style done signal: schema-constrained `[]` output. Follow up
-      // once with tools disabled so the model can produce a plain-text reply.
-      const followUp = await completion({ messages: history, tools: [], signal });
-      for await (const chunk of followUp) {
+      for await (const chunk of stream) {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-        const content = chunk.choices[0]?.delta?.content;
-        if (content) yield { type: "text-delta", delta: content };
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+        const { delta } = choice;
+        if (delta.content) {
+          assistantText += delta.content;
+          yield { type: "text-delta", delta: delta.content };
+        }
+        if (delta.tool_calls) accumulateToolCalls(pending, delta.tool_calls);
+        if (choice.finish_reason) finish = choice.finish_reason;
       }
+      endStep();
+      log.info(`step ${step + 1}: stream complete`, {
+        finish,
+        pendingCalls: pending.size,
+        textChars: assistantText.length,
+      });
+
+      if (finish === "tool_calls" && pending.size === 0) {
+        // Hermes-style schema-constrained `[]` output. Two sub-cases:
+        // 1. Stall before substantive work — one-time recovery: append a
+        //    system reminder and retry with tools still enabled.
+        // 2. Genuine done signal — one plain-text follow-up, then return.
+        const stalled = !stallRetried && !historyHasSubstantiveCall(history);
+        if (stalled) {
+          stallRetried = true;
+          log.warn("empty tool_calls before any substantive work → injecting STALL_REMINDER and retrying");
+          history.push({ role: "system", content: STALL_REMINDER });
+          continue;
+        }
+        log.info("empty tool_calls after substantive work → follow-up with tools disabled for plain-text reply");
+        const followUp = await completion({ messages: history, tools: [], signal });
+        for await (const chunk of followUp) {
+          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) yield { type: "text-delta", delta: content };
+        }
+        log.info("plain-text follow-up complete");
+        return;
+      }
+
+      if (finish === "tool_calls" || pending.size > 0) {
+        const calls = [...pending.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, c]) => c);
+        log.info(
+          `dispatching ${calls.length} tool call(s) in parallel: ${calls.map((c) => c.name).join(", ")}`,
+        );
+        history.push({
+          role: "assistant",
+          content: assistantText || null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: "function" as const,
+            function: { name: c.name, arguments: c.arguments },
+          })),
+        });
+
+        type DispatchResult = { call: PendingToolCall; args: Record<string, unknown>; result: string; isError: boolean };
+
+        const results: DispatchResult[] = await Promise.all(
+          calls.map(async (c) => {
+            const args = parseArgs(c.arguments);
+            log.info(`  → ${c.name}(${preview(args)})`);
+            const endCall = log.time(`  ← ${c.name}`);
+            try {
+              const result = await dispatchTool(executor, c.name, args);
+              endCall();
+              log.info(`  ← ${c.name} ok`, { resultBytes: result.length, preview: preview(result) });
+              return { call: c, args, result, isError: false };
+            } catch (err) {
+              endCall();
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`  ← ${c.name} error: ${msg}`);
+              return { call: c, args, result: msg, isError: true };
+            }
+          }),
+        );
+
+        for (const r of results) {
+          history.push({
+            role: "tool",
+            tool_call_id: r.call.id,
+            content: r.result,
+          });
+          yield {
+            type: "tool-call",
+            id: r.call.id,
+            name: r.call.name,
+            args: r.args,
+            result: r.result,
+            isError: r.isError,
+          };
+        }
+        continue;
+      }
+
+      log.info(`step ${step + 1}: finish=${finish}, returning`);
       return;
     }
 
-    if (finish === "tool_calls" || pending.size > 0) {
-      const calls = [...pending.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([, c]) => c);
-      history.push({
-        role: "assistant",
-        content: assistantText || null,
-        tool_calls: calls.map((c) => ({
-          id: c.id,
-          type: "function" as const,
-          function: { name: c.name, arguments: c.arguments },
-        })),
-      });
-
-      type DispatchResult = { call: PendingToolCall; args: Record<string, unknown>; result: string; isError: boolean };
-
-      async function dispatchOne(c: PendingToolCall): Promise<DispatchResult> {
-        const args = injectSessionId(parseArgs(c.arguments), knownSessionId);
-        try {
-          const result = await dispatchTool(executor, c.name, args);
-          return { call: c, args, result, isError: false };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { call: c, args, result: msg, isError: true };
-        }
-      }
-
-      let results: DispatchResult[];
-      const startIdx = calls.findIndex((c) => c.name === "start_session");
-      if (startIdx !== -1) {
-        // Run start_session first so we have the session_id before dispatching
-        // any co-batched stateful calls.
-        const startRes = await dispatchOne(calls[startIdx]);
-        if (!startRes.isError) {
-          try {
-            const parsed = JSON.parse(startRes.result);
-            if (typeof parsed.session_id === "string") knownSessionId = parsed.session_id;
-          } catch { /* ignore */ }
-        }
-        const rest = calls.filter((_, i) => i !== startIdx);
-        const restResults = await Promise.all(rest.map(dispatchOne));
-        // Reassemble in original call order.
-        let ri = 0;
-        results = calls.map((_, i) => (i === startIdx ? startRes : restResults[ri++]));
-      } else {
-        results = await Promise.all(calls.map(dispatchOne));
-      }
-
-      // Extract session_id from any completed start_session (handles the case
-      // where it ran outside a batch too).
-      for (const r of results) {
-        if (r.call.name === "start_session" && !r.isError) {
-          try {
-            const parsed = JSON.parse(r.result);
-            if (typeof parsed.session_id === "string") knownSessionId = parsed.session_id;
-          } catch { /* ignore */ }
-        }
-      }
-
-      for (const r of results) {
-        history.push({ role: "tool", tool_call_id: r.call.id, content: r.result });
-        yield {
-          type: "tool-call",
-          id: r.call.id,
-          name: r.call.name,
-          args: r.args,
-          result: r.result,
-          isError: r.isError,
-        };
-      }
-      continue;
-    }
-
-    return;
+    log.error(`exceeded maxSteps (${maxSteps}) — aborting loop`);
+    throw new Error(`Tool loop exceeded max steps (${maxSteps})`);
+  } finally {
+    log.groupEnd();
   }
-
-  throw new Error(`Tool loop exceeded max steps (${maxSteps})`);
 }

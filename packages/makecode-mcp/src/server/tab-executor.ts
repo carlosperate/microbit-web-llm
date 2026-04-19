@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { MakeCodeDriver } from "../browser/driver-port.js";
-import type { MakeCodeExecutor, StartSessionResult } from "../shared/types.js";
+import type { ServerExecutor, StartSessionResult } from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
 import {
   EMPTY_EDITOR_ERROR,
   fillProjectDefaults,
 } from "../shared/project-defaults.js";
+import { createLogger } from "../shared/logger.js";
 import type { TabHandle, TabPool } from "./tab-pool.js";
 
+const log = createLogger("tab-executor");
 const toBase64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
-export class TabExecutor implements MakeCodeExecutor {
+export class TabExecutor implements ServerExecutor {
   private readonly sessions = new Map<string, TabHandle>();
 
   constructor(private readonly pool: TabPool) {}
@@ -19,6 +21,10 @@ export class TabExecutor implements MakeCodeExecutor {
     const tab = await this.pool.openTab();
     const session_id = randomUUID();
     this.sessions.set(session_id, tab);
+    log.info("startSession → new tab", {
+      session_id,
+      openSessions: this.sessions.size,
+    });
     return { session_id };
   }
 
@@ -26,6 +32,10 @@ export class TabExecutor implements MakeCodeExecutor {
     const tab = this.requireSession(sessionId);
     this.sessions.delete(sessionId);
     await tab.close().catch(() => {});
+    log.info("endSession → tab closed", {
+      session_id: sessionId,
+      openSessions: this.sessions.size,
+    });
   }
 
   async getCurrentCode(sessionId: string): Promise<string> {
@@ -68,6 +78,7 @@ export class TabExecutor implements MakeCodeExecutor {
 
   async dispose(): Promise<void> {
     const tabs = [...this.sessions.values()];
+    log.info("dispose → closing sessions and pool", { openSessions: tabs.length });
     this.sessions.clear();
     await Promise.all(tabs.map((t) => t.close().catch(() => {})));
     await this.pool.dispose();

@@ -1,7 +1,8 @@
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult } from "@assistant-ui/react";
 import type { ThreadMessage, ThreadAssistantMessagePart } from "@assistant-ui/react";
 import { tools as TOOL_SCHEMAS } from "makecode-mcp/browser";
-import type { MakeCodeExecutor } from "makecode-mcp/browser";
+import type { BrowserExecutor } from "makecode-mcp/browser";
+import { createLogger, preview } from "makecode-mcp/browser";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 import {
   runToolLoop,
@@ -9,6 +10,8 @@ import {
   type OpenAIMessage,
   type ToolLoopEvent,
 } from "./tool-loop.js";
+
+const log = createLogger("adapter");
 
 export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
@@ -63,14 +66,27 @@ export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessa
 
 export interface ChatAdapterDeps {
   completion: ChatCompletionFn;
-  getExecutor: () => MakeCodeExecutor | null;
+  getExecutor: () => BrowserExecutor | null;
 }
 
 export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
   return {
     async *run(opts: ChatModelRunOptions): AsyncGenerator<ChatModelRunResult, void> {
       const executor = deps.getExecutor();
+      const lastUser = [...opts.messages].reverse().find((m) => m.role === "user");
+      const lastText =
+        lastUser?.content
+          .filter((p) => p.type === "text")
+          .map((p) => (p as { text: string }).text)
+          .join("") ?? "";
+      log.group(`run() turn: ${preview(lastText, 80)}`);
+      log.info("run() starting", {
+        messages: opts.messages.length,
+        executorReady: !!executor,
+      });
       if (!executor) {
+        log.warn("run() → no executor yet (editor still loading)");
+        log.groupEnd();
         yield {
           status: { type: "incomplete", reason: "error", error: "MakeCode editor is still loading" },
           content: [
@@ -85,9 +101,15 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
 
       const converted = convertMessages(opts.messages);
       const messages: OpenAIMessage[] = [{ role: "system", content: SYSTEM_PROMPT }, ...converted];
+      log.debug("messages prepared", {
+        total: messages.length,
+        roles: messages.map((m) => m.role),
+      });
 
       const parts: ThreadAssistantMessagePart[] = [];
       let textBuffer = "";
+      let totalTextChars = 0;
+      let toolCallCount = 0;
 
       const flush = (): ChatModelRunResult => ({ content: [...parts, ...(textBuffer ? [{ type: "text", text: textBuffer } as const] : [])] });
 
@@ -101,8 +123,14 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
         }) as AsyncIterable<ToolLoopEvent>) {
           if (ev.type === "text-delta") {
             textBuffer += ev.delta;
+            totalTextChars += ev.delta.length;
             yield flush();
           } else if (ev.type === "tool-call") {
+            toolCallCount++;
+            log.info(`tool-call event → ${ev.name}`, {
+              isError: ev.isError,
+              resultBytes: ev.result.length,
+            });
             if (textBuffer) {
               parts.push({ type: "text", text: textBuffer });
               textBuffer = "";
@@ -124,14 +152,20 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
           parts.push({ type: "text", text: textBuffer });
           textBuffer = "";
         }
+        log.info("run() complete", { toolCallCount, totalTextChars });
+        log.groupEnd();
         yield { status: { type: "complete", reason: "stop" }, content: parts };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         const tailText = textBuffer ? [{ type: "text" as const, text: textBuffer }] : [];
         if (error.name === "AbortError") {
+          log.warn("run() cancelled", { toolCallCount, totalTextChars });
+          log.groupEnd();
           yield { status: { type: "incomplete", reason: "cancelled" }, content: [...parts, ...tailText] };
           return;
         }
+        log.error("run() error", error);
+        log.groupEnd();
         yield {
           status: { type: "incomplete", reason: "error", error: error.message },
           content: [...parts, ...tailText],

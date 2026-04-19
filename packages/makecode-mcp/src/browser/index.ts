@@ -1,4 +1,5 @@
 export * from "../shared/index.js";
+export { browserTools as tools, browserToolNames as toolNames } from "../shared/tools.js";
 export * from "./driver-port.js";
 export * from "./iframe-executor.js";
 export * from "./frame-driver-adapter.js";

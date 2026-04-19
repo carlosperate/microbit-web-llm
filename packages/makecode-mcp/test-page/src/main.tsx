@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MakeCodePanel } from "../../src/browser/MakeCodePanel.js";
-import type { MakeCodeExecutor } from "../../src/shared/types.js";
+import type { BrowserExecutor } from "../../src/shared/types.js";
 
 function cropSvgToContent(svgString: string, padding = 20): string {
   // Position off-screen so the browser performs full layout (required for getBBox).
@@ -130,9 +130,8 @@ function SvgModal({ svg, onClose }: { svg: string; onClose: () => void }) {
 }
 
 function App() {
-  const executorRef = useRef<MakeCodeExecutor | null>(null);
+  const executorRef = useRef<BrowserExecutor | null>(null);
   const [ready, setReady] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [code, setCode] = useState(SAMPLE_CODE);
   const [modalSvg, setModalSvg] = useState<string | null>(null);
@@ -140,7 +139,7 @@ function App() {
   const append = (msg: string) =>
     setLog((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
 
-  const handleExecutorReady = useCallback((executor: MakeCodeExecutor) => {
+  const handleExecutorReady = useCallback((executor: BrowserExecutor) => {
     executorRef.current = executor;
     setReady(true);
     append("executor ready");
@@ -151,31 +150,9 @@ function App() {
     return executorRef.current;
   };
 
-  const handleStartSession = async () => {
-    try {
-      const { session_id } = await exec().startSession();
-      setSessionId(session_id);
-      append(`start_session → ${session_id}`);
-    } catch (e) {
-      append(`ERROR: ${e}`);
-    }
-  };
-
-  const handleEndSession = async () => {
-    if (!sessionId) return append("no active session");
-    try {
-      await exec().endSession(sessionId);
-      setSessionId(null);
-      append("end_session → ok");
-    } catch (e) {
-      append(`ERROR: ${e}`);
-    }
-  };
-
   const handleSetCode = async () => {
-    if (!sessionId) return append("no active session");
     try {
-      await exec().setCode(sessionId, code);
+      await exec().setCode(code);
       append("set_code → ok");
     } catch (e) {
       append(`ERROR: ${e}`);
@@ -183,9 +160,8 @@ function App() {
   };
 
   const handleGetCode = async () => {
-    if (!sessionId) return append("no active session");
     try {
-      const result = await exec().getCurrentCode(sessionId);
+      const result = await exec().getCurrentCode();
       append(`get_current_code → ${result.slice(0, 80)}…`);
     } catch (e) {
       append(`ERROR: ${e}`);
@@ -199,9 +175,8 @@ function App() {
   };
 
   const handleGetSvg = async () => {
-    if (!sessionId) return append("no active session");
     try {
-      const result = await exec().getBlocksSvg(sessionId);
+      const result = await exec().getBlocksSvg();
       showSvg(result, "get_blocks_svg");
     } catch (e) {
       append(`ERROR: ${e}`);
@@ -218,9 +193,8 @@ function App() {
   };
 
   const handleGetHex = async () => {
-    if (!sessionId) return append("no active session");
     try {
-      const b64 = await exec().getHexFile(sessionId);
+      const b64 = await exec().getHexFile();
       const hex = atob(b64);
       const blob = new Blob([hex], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
@@ -271,18 +245,6 @@ function App() {
           <span style={{ color: ready ? "green" : "gray" }}>
             {ready ? "executor ready" : "waiting for editor…"}
           </span>
-          <span style={{ color: sessionId ? "green" : "gray", wordBreak: "break-all" }}>
-            {sessionId ? `session: ${sessionId.slice(0, 16)}…` : "no active session"}
-          </span>
-
-          <hr />
-
-          <button style={btn(ready)} disabled={!ready} onClick={handleStartSession}>
-            start_session
-          </button>
-          <button style={btn(!!sessionId)} disabled={!sessionId} onClick={handleEndSession}>
-            end_session
-          </button>
 
           <hr />
 
@@ -293,22 +255,22 @@ function App() {
             style={{ fontFamily: "monospace", fontSize: 12, resize: "vertical", padding: 6 }}
           />
 
-          <button style={btn(!!sessionId)} disabled={!sessionId} onClick={handleSetCode}>
+          <button style={btn(ready)} disabled={!ready} onClick={handleSetCode}>
             set_code
           </button>
-          <button style={btn(!!sessionId)} disabled={!sessionId} onClick={handleGetCode}>
+          <button style={btn(ready)} disabled={!ready} onClick={handleGetCode}>
             get_current_code
           </button>
 
           <hr />
 
-          <button style={btn(!!sessionId)} disabled={!sessionId} onClick={handleGetSvg}>
-            get_blocks_svg (session)
+          <button style={btn(ready)} disabled={!ready} onClick={handleGetSvg}>
+            get_blocks_svg (editor)
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetSvgFromCode}>
             get_blocks_svg_from_code
           </button>
-          <button style={btn(!!sessionId)} disabled={!sessionId} onClick={handleGetHex}>
+          <button style={btn(ready)} disabled={!ready} onClick={handleGetHex}>
             get_hex_file (download)
           </button>
 

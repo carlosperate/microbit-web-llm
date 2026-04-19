@@ -1,5 +1,8 @@
 import type { InitProgressReport } from "@mlc-ai/web-llm";
 import type { ChatCompletionFn, OpenAIMessage, StreamChunk } from "./tool-loop.js";
+import { createLogger } from "makecode-mcp/browser";
+
+const log = createLogger("webllm");
 
 // Qwen2.5-Coder 7B is the preferred model (coder-tuned). WebLLM's built-in
 // function-calling path is hard-coded to Hermes-2-Pro variants, but the
@@ -43,7 +46,6 @@ function buildToolsSystemPrompt(tools: unknown[]): string {
   return (
     `You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. ` +
     `You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. ` +
-    `When a function call returns a value (e.g. session_id from start_session), store it and pass it as an argument to subsequent calls that require it. ` +
     `IMPORTANT: if the user asks you to write, load, or show a micro:bit program, you MUST call the appropriate tools — never just describe the code or explain how to call the tools. ` +
     `Here are the available tools: <tools> ${JSON.stringify(tools)} </tools>. ` +
     `For each function call return a json object with the form {"name": <function-name>, "arguments": <args-dict>}. ` +
@@ -80,10 +82,20 @@ async function* parseHermesStream(
     try {
       const raw = JSON.parse(buffer);
       if (Array.isArray(raw)) parsed = raw;
-    } catch {
+    } catch (err) {
+      log.warn("hermes stream: JSON parse failed, treating as empty tool-calls", {
+        bufferBytes: buffer.length,
+        error: (err as Error).message,
+      });
       // Fall through with empty array; tool-loop will issue a follow-up.
     }
   }
+  log.info("hermes stream parsed", {
+    finish,
+    bufferBytes: buffer.length,
+    toolCalls: parsed.length,
+    names: parsed.map((c) => c.name),
+  });
   const tool_calls = parsed.map((c, i) => ({
     index: i,
     id: `call-${Date.now()}-${i}`,
@@ -105,20 +117,38 @@ export async function loadWebLLM(
   modelId: string = MODEL_ID,
 ): Promise<ChatCompletionFn> {
   if (!isWebGPUSupported()) {
+    log.error("WebGPU unavailable — refusing to load model");
     throw new Error("WebGPU is not available in this browser. Chrome 113+ is required.");
   }
+  log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
   const webllm = await import("@mlc-ai/web-llm");
   const manualTransform = needsManualTransform(modelId);
-  // WebLLM's validator rejects `tools` for any model not in this allowlist.
-  // The list is a mutable export; if we're about to apply the transform
-  // ourselves, push the id in so validation passes. We don't pass `tools`
-  // through for these models, so web-llm's own transformation won't fire.
+  log.info("loadWebLLM: path decided", { manualTransform, nativeToolCalling: !manualTransform });
   if (manualTransform && !webllm.functionCallingModelIds.includes(modelId)) {
+    log.info("patching functionCallingModelIds to allow manual-transform model", { modelId });
     webllm.functionCallingModelIds.push(modelId);
   }
-  const engine = await webllm.CreateMLCEngine(modelId, { initProgressCallback: onProgress });
+  const endLoad = log.time("CreateMLCEngine (first run downloads weights)");
+  const engine = await webllm.CreateMLCEngine(modelId, {
+    initProgressCallback: (r) => {
+      // Keep this quiet — progress fires frequently. Log major waypoints only.
+      if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
+        log.info("load progress", { progress: r.progress, text: r.text });
+      }
+      onProgress(r);
+    },
+  });
+  endLoad();
+  log.info("engine ready", { modelId });
+
   return async ({ messages, tools, signal: _signal }) => {
     const hasTools = tools.length > 0;
+    log.debug("chat.completions.create", {
+      hasTools,
+      toolCount: tools.length,
+      messageCount: messages.length,
+      manualTransform,
+    });
     if (!hasTools) {
       const stream = await engine.chat.completions.create({
         messages: messages as any,
@@ -141,7 +171,7 @@ export async function loadWebLLM(
     // NOT pass `tools` through (we've already encoded them into the prompt
     // and grammar).
     // Preserve any app-level system messages by prepending them before the
-    // Hermes tool-calling prompt so the model retains session-lifecycle context.
+    // Hermes tool-calling prompt so the app's guidance still reaches the model.
     const toolsPrompt = buildToolsSystemPrompt(tools);
     const appSystem = messages
       .filter((m) => m.role === "system")
@@ -152,6 +182,10 @@ export async function loadWebLLM(
       { role: "system", content: systemPrompt },
       ...messages.filter((m) => m.role !== "system"),
     ];
+    log.debug("manual hermes transform", {
+      systemPromptChars: systemPrompt.length,
+      nonSystemMessages: withSystem.length - 1,
+    });
     const stream = await engine.chat.completions.create({
       messages: withSystem as any,
       response_format: { type: "json_object", schema: FUNCTION_CALL_SCHEMA_ARRAY } as any,

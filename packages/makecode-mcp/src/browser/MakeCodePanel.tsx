@@ -3,10 +3,13 @@ import { MakeCodeFrame } from "@microbit/makecode-embed/react";
 import type { MakeCodeFrameDriver } from "@microbit/makecode-embed/vanilla";
 import { IframeExecutor } from "./iframe-executor.js";
 import { MakeCodeFrameDriverAdapter } from "./frame-driver-adapter.js";
-import type { MakeCodeExecutor } from "../shared/types.js";
+import type { BrowserExecutor } from "../shared/types.js";
+import { createLogger } from "../shared/logger.js";
+
+const log = createLogger("panel");
 
 export interface MakeCodePanelProps {
-  onExecutorReady: (executor: MakeCodeExecutor) => void;
+  onExecutorReady: (executor: BrowserExecutor) => void;
   baseUrl?: string;
   controllerId?: string;
   className?: string;
@@ -40,14 +43,17 @@ export function MakeCodePanel({
     const adapter = ensureAdapter();
     if (!adapter || notifiedRef.current) return;
     notifiedRef.current = true;
+    log.info("iframe ready → handing executor to host app");
     onExecutorReady(new IframeExecutor(adapter));
   }, [ensureAdapter, onExecutorReady]);
 
   const handleEditorContentLoaded = useCallback(() => {
+    log.debug("onEditorContentLoaded");
     notifyReady();
   }, [notifyReady]);
 
   const handleWorkspaceLoaded = useCallback(() => {
+    log.debug("onWorkspaceLoaded");
     notifyReady();
   }, [notifyReady]);
 
@@ -66,13 +72,15 @@ export function MakeCodePanel({
   );
 
   useEffect(() => {
+    log.info("mounting MakeCodePanel", { baseUrl, controllerId });
     return () => {
+      log.info("unmounting MakeCodePanel → disposing adapter");
       adapterRef.current?.dispose();
       driverRef.current = null;
       adapterRef.current = null;
       notifiedRef.current = false;
     };
-  }, []);
+  }, [baseUrl, controllerId]);
 
   return (
     <MakeCodeFrame

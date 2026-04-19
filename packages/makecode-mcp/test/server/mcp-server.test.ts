@@ -3,10 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildMcpServer } from "../../src/server/mcp-server.ts";
 import { SessionError } from "../../src/shared/types.ts";
-import type { MakeCodeExecutor } from "../../src/shared/types.ts";
-import { toolNames } from "../../src/shared/tools.ts";
+import type { ServerExecutor } from "../../src/shared/types.ts";
+import { serverToolNames } from "../../src/shared/tools.ts";
 
-function fakeExecutor(): MakeCodeExecutor {
+function fakeExecutor(): ServerExecutor {
   let active: string | null = null;
   return {
     async startSession() {
@@ -41,7 +41,7 @@ function fakeExecutor(): MakeCodeExecutor {
   };
 }
 
-async function connect(exec: MakeCodeExecutor) {
+async function connect(exec: ServerExecutor) {
   const server = buildMcpServer({ executor: exec });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0" });
@@ -61,7 +61,7 @@ describe("McpServer", () => {
   it("lists all eight tools from the shared schema", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([...toolNames].sort());
+    expect(names).toEqual([...serverToolNames].sort());
   });
 
   it("calls start_session and returns the session_id as JSON text", async () => {
