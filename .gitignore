@@ -1,6 +1,19 @@
+###########
+# Project #
+###########
+packages/app/test-results/
+packages/makecode-mcp/test-results/
+spike/
+
+#############
+# Node & TS #
+#############
 node_modules/
 dist/
 dist-test-page/
 *.tsbuildinfo
-spike/out/
+
+######
+# OS #
+######
 .DS_Store

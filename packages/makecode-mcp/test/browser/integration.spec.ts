@@ -1,19 +1,15 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// MakeCode loads over the network — allow up to 60 s per action.
-test.setTimeout(120_000);
+// MakeCode loads over the network; the editor-ready wait below allows up to
+// 45 s for that first paint, plus headroom for a single compile/render step.
+test.setTimeout(75_000);
 
 async function waitForEditorReady(page: Page) {
-  await expect(page.getByText("executor ready", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("executor ready", { exact: true })).toBeVisible({ timeout: 45_000 });
 }
 
 async function clickButton(page: Page, label: string) {
   await page.getByRole("button", { name: label }).click();
-}
-
-async function startSession(page: Page) {
-  await clickButton(page, "start_session");
-  await expect(page.locator("span").filter({ hasText: /^session:/ })).toBeVisible({ timeout: 5_000 });
 }
 
 test.describe("MakeCodePanel integration", () => {
@@ -26,20 +22,7 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByText("executor ready", { exact: true })).toBeVisible();
   });
 
-  test("start_session creates an active session", async ({ page }) => {
-    await startSession(page);
-    await expect(page.locator("span").filter({ hasText: /^session:/ })).toContainText("session:");
-  });
-
-  test("end_session clears the active session", async ({ page }) => {
-    await startSession(page);
-    await clickButton(page, "end_session");
-    await expect(page.getByText("no active session")).toBeVisible({ timeout: 5_000 });
-  });
-
   test("set_code then get_current_code round-trips the TypeScript", async ({ page }) => {
-    await startSession(page);
-
     // Replace the default code with something distinctive
     await page.locator("textarea").fill('basic.showString("roundtrip")');
     await clickButton(page, "set_code");
@@ -52,7 +35,6 @@ test.describe("MakeCodePanel integration", () => {
   });
 
   test("get_blocks_svg_from_code opens the SVG modal with content", async ({ page }) => {
-    // Uses the default code in the textarea — no session needed
     await clickButton(page, "get_blocks_svg_from_code");
 
     // Modal appears
@@ -69,18 +51,16 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByTitle("blocks SVG")).not.toBeVisible();
   });
 
-  test("get_blocks_svg (session) opens the modal after set_code", async ({ page }) => {
-    await startSession(page);
+  test("get_blocks_svg (editor) opens the modal after set_code", async ({ page }) => {
     await page.locator("textarea").fill('basic.showLeds(`# . . . #\n. # . # .\n. . # . .\n. # . # .\n# . . . #`)');
     await clickButton(page, "set_code");
     await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
 
-    await clickButton(page, "get_blocks_svg (session)");
+    await clickButton(page, "get_blocks_svg (editor)");
     await expect(page.getByTitle("blocks SVG")).toBeVisible({ timeout: 30_000 });
   });
 
   test("get_hex_file triggers a download with a valid hex file", async ({ page }) => {
-    await startSession(page);
     await clickButton(page, "set_code");
     await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
 

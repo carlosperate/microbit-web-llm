@@ -367,6 +367,66 @@ describe("runToolLoop", () => {
       // Turn 3 is the tools-disabled fallback; no retry turn between.
       expect(sawEmptyTools).toEqual([false, false, true]);
     });
+
+    it("merges the stall reminder into an existing leading system message instead of appending a second one", async () => {
+      // Regression: WebLLM's native tool-calling path (Hermes-3) throws
+      // SystemMessageOrderError if any system message appears after index 0,
+      // so the retry must extend the leading system message rather than push
+      // a new one.
+      let turn = 0;
+      const callsReceived: any[] = [];
+      const engine: ChatCompletionFn = async ({ messages }) => {
+        callsReceived.push(messages);
+        turn++;
+        if (turn === 1 || turn === 2) return asStream([chunk({}, "tool_calls")]);
+        return asStream([chunk({ content: "ok" }), chunk({}, "stop")]);
+      };
+      for await (const _ of runToolLoop({
+        completion: engine,
+        executor: makeExecutor(),
+        messages: [
+          { role: "system", content: "ORIGINAL_SYSTEM" },
+          { role: "user", content: "go" },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+          },
+        ] as any,
+        signal: new AbortController().signal,
+      })) {
+        // drain
+      }
+      // After the retry, the second call's history must still have exactly one
+      // system message — at index 0 — containing both the original prompt and
+      // the merged reminder.
+      const turn2 = callsReceived[1];
+      const systems = turn2.filter((m: any) => m.role === "system");
+      expect(systems).toHaveLength(1);
+      expect(turn2[0].role).toBe("system");
+      expect(turn2[0].content).toContain("ORIGINAL_SYSTEM");
+      expect(turn2[0].content).toMatch(/workflow|tool/i);
+    });
+  });
+
+  it("forwards completionOptions (temperature, maxTokens) to the completion fn", async () => {
+    const seen: any[] = [];
+    const engine: ChatCompletionFn = async (params) => {
+      seen.push(params.options);
+      return asStream([chunk({ content: "hi" }), chunk({}, "stop")]);
+    };
+    for await (const _ of runToolLoop({
+      completion: engine,
+      executor: makeExecutor(),
+      messages: [{ role: "user", content: "go" }],
+      tools: [],
+      signal: new AbortController().signal,
+      completionOptions: { temperature: 0.3, maxTokens: 256 },
+    })) {
+      // drain
+    }
+    expect(seen[0]).toEqual({ temperature: 0.3, maxTokens: 256 });
   });
 
   it("stops after maxSteps to avoid infinite loops", async () => {

@@ -163,4 +163,60 @@ describe("createChatAdapter", () => {
     expect(joinedText).not.toContain("boom");
     expect(joinedText).not.toMatch(/_Error/i);
   });
+
+  it("uses the system prompt from settings (override) and forwards completionOptions + maxSteps", async () => {
+    const seen: any[] = [];
+    const completion: ChatCompletionFn = async (params) => {
+      seen.push(params);
+      return asStream([chunk({ content: "ok" }), chunk({}, "stop")]);
+    };
+    const settings = {
+      systemPrompt: "CUSTOM_OVERRIDE_PROMPT",
+      temperature: 0.42,
+      maxTokens: 333,
+      maxSteps: 7,
+    };
+    const adapter = createChatAdapter({
+      completion,
+      getExecutor: () => makeExecutor(),
+      getSettings: () => settings,
+    });
+    await drain(adapter.run(makeOpts([userMsg("hi")])) as AsyncGenerator<any>);
+    expect(seen[0].messages[0]).toEqual({ role: "system", content: "CUSTOM_OVERRIDE_PROMPT" });
+    expect(seen[0].options).toEqual({ temperature: 0.42, maxTokens: 333 });
+  });
+
+  it("falls back to the default system prompt when settings.systemPrompt is empty", async () => {
+    const seen: any[] = [];
+    const completion: ChatCompletionFn = async (params) => {
+      seen.push(params);
+      return asStream([chunk({ content: "ok" }), chunk({}, "stop")]);
+    };
+    const adapter = createChatAdapter({
+      completion,
+      getExecutor: () => makeExecutor(),
+      getSettings: () => ({ ...DEFAULT_SETTINGS, systemPrompt: "   " }),
+    });
+    await drain(adapter.run(makeOpts([userMsg("hi")])) as AsyncGenerator<any>);
+    expect(seen[0].messages[0].content).toContain("micro:bit");
+  });
+
+  it("re-reads settings via getSettings on every turn (no stale closure)", async () => {
+    const completion: ChatCompletionFn = async (params) => {
+      seenOptions.push(params.options);
+      return asStream([chunk({ content: "ok" }), chunk({}, "stop")]);
+    };
+    const seenOptions: any[] = [];
+    let current = { ...DEFAULT_SETTINGS, temperature: 0.1 };
+    const adapter = createChatAdapter({
+      completion,
+      getExecutor: () => makeExecutor(),
+      getSettings: () => current,
+    });
+    await drain(adapter.run(makeOpts([userMsg("hi")])) as AsyncGenerator<any>);
+    current = { ...current, temperature: 0.9 };
+    await drain(adapter.run(makeOpts([userMsg("hi again")])) as AsyncGenerator<any>);
+    expect(seenOptions[0].temperature).toBe(0.1);
+    expect(seenOptions[1].temperature).toBe(0.9);
+  });
 });
