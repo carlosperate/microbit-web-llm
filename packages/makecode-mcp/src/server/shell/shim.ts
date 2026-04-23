@@ -53,8 +53,13 @@ function ensureDriver(): Promise<MakeCodeFrameDriver> {
         initialProjects: async () => [{ text: fillProjectDefaults({}, "") }],
         onWorkspaceSave: (e: { project: { header?: unknown; text?: Record<string, string> } }) => {
           latestHeader = e.project?.header ?? latestHeader;
+          // MakeCode emits workspacesave events with only a header (no text)
+          // after internal triggers like importProject. Those must not drain
+          // waiters queued for an explicit saveProject() call, or the waiter
+          // resolves with {} and downstream reads see an empty main.ts.
+          const text = e.project?.text;
+          if (!text) return;
           const cbs = saveWaiters.splice(0);
-          const text = e.project?.text ?? {};
           for (const cb of cbs) cb({ text });
         },
         onEditorContentLoaded: () => resolveReady(),

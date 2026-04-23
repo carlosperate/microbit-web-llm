@@ -47,7 +47,13 @@ export class TabExecutor implements ServerExecutor {
   async setCode(sessionId: string, code: string): Promise<void> {
     const { driver } = this.requireSession(sessionId);
     const current = await driver.getProject();
-    await driver.setProject({ text: fillProjectDefaults(current.text, code) });
+    // Drop main.blocks so the blocks view re-decompiles from the new main.ts.
+    // Otherwise MakeCode boots in blocks mode, renders the stale (empty) blocks
+    // XML, and overwrites main.ts with the decompiled result ("\n").
+    const { "main.blocks": _drop, ...rest } = current.text;
+    await driver.setProject({
+      text: { ...fillProjectDefaults(rest, code), "main.blocks": "" },
+    });
   }
 
   async getBlocksSvg(sessionId: string): Promise<string> {
@@ -70,7 +76,9 @@ export class TabExecutor implements ServerExecutor {
 
   async getHexFileFromCode(code: string): Promise<string> {
     return this.pool.withTransientTab(async (d) => {
-      await d.setProject({ text: fillProjectDefaults({}, code) });
+      await d.setProject({
+        text: { ...fillProjectDefaults({}, code), "main.blocks": "" },
+      });
       const { hex } = await d.compile();
       return toBase64(hex);
     });
