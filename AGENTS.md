@@ -22,6 +22,7 @@ npm run build --workspaces          # build all packages
 npm run test --workspaces           # run unit tests (Vitest); no-op until Phase 2
 npm run test:e2e                    # run Playwright e2e tests; available from Phase 2
 npm run dev -w app                  # run the app in dev mode; available from Phase 3
+npm run dev:test-mcp -w makecode-mcp # build + launch MCP Inspector against the stdio server
 ```
 
 Package manager: **npm workspaces**. Do not use pnpm or yarn.
@@ -152,6 +153,8 @@ We deliberately do **not** use the high-level `McpServer`: it requires zod `inpu
 ### CLI entrypoint
 
 `bin.ts` (registered as the `makecode-mcp` bin) wires `PuppeteerTabPool` → `TabExecutor` → `buildMcpServer` → `StdioServerTransport`, and disposes the executor on SIGINT/SIGTERM. The server is a standard stdio MCP server — point Claude Desktop / MCP Inspector at `node dist/server/bin.js` (or `npx makecode-mcp` once installed).
+
+For local manual testing, run `npm run dev:test-mcp -w makecode-mcp`. This builds the package and launches the MCP Inspector (`npx @modelcontextprotocol/inspector`) wired to `node dist/server/bin.js`. See https://modelcontextprotocol.io/docs/tools/inspector for the Inspector UI.
 
 ### Shared project defaults
 
