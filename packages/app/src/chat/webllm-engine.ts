@@ -4,42 +4,43 @@ import { createLogger } from "makecode-mcp/browser";
 
 const log = createLogger("webllm");
 
-// Qwen2.5-Coder 7B is the preferred model (coder-tuned). WebLLM's built-in
-// function-calling path is hard-coded to Hermes-2-Pro variants, but the
-// underlying mechanism — a grammar-constrained JSON-array output plus a
-// system-prompt describing the tools — is model-agnostic. Grammar-level
-// constraints force any sufficiently capable instruction-tuned model to emit
-// valid tool-call JSON, and Qwen2.5-Coder follows the pattern reliably.
+// All supported models go through the same grammar-constrained tool-calling
+// path: a system prompt describing the tools plus `response_format` forcing a
+// JSON-array of `{name, arguments}` objects. WebLLM's built-in Hermes-2-Pro
+// path is deliberately bypassed — its injected prompt omits the
+// `<tool_call></tool_call>` wrapper instruction Hermes-3 was trained on, so
+// Hermes-3 emits bare JSON or markdown that WebLLM's parser then rejects.
+// Owning the prompt and parser end-to-end gives reliable behaviour across
+// every model in the picker and any future additions.
 export const MODEL_ID = "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC";
 
-// User-selectable models. Qwen is coder-tuned and needs our manual
-// Hermes-2-Pro transformation; Hermes-3 is already on WebLLM's
-// function-calling allowlist and handles tools natively.
 export const MODELS = [
   {
     id: "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",
     shortLabel: "Qwen2.5-Coder 7B",
-    label: "Qwen2.5-Coder 7B Instruct (coder-tuned, manual tool transform)",
+    label: "Qwen2.5-Coder 7B Instruct (coder-tuned)",
   },
   {
     id: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
     shortLabel: "Hermes-3 8B",
-    label: "Hermes-3 Llama 3.1 8B (native tool calling)",
+    label: "Hermes-3 Llama 3.1 8B",
+  },
+  {
+    id: "Qwen3-8B-q4f16_1-MLC",
+    shortLabel: "Qwen3 8B",
+    label: "Qwen3 8B",
+  },
+  {
+    id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",
+    shortLabel: "Llama-3.1 8B",
+    label: "Llama-3.1 8B Instruct",
   },
 ] as const;
 
 export type ModelId = (typeof MODELS)[number]["id"];
 
-function needsManualTransform(modelId: string): boolean {
-  // WebLLM auto-applies the Hermes-2-Pro transformation only for
-  // `Hermes-2-Pro-*` IDs; Hermes-3 is allowlisted and handles tools natively.
-  // Everything else (Qwen) needs the manual injection.
-  return !modelId.startsWith("Hermes-");
-}
-
-// JSON schema for one Hermes-2-Pro tool call; an array of these is the
-// grammar we constrain the model to. Copied verbatim from web-llm's internals
-// (officialHermes2FunctionCallSchema) so behaviour matches the supported path.
+// JSON schema for one tool call; an array of these is the grammar we constrain
+// the model to. Shape matches Hermes-2-Pro's officialHermes2FunctionCallSchema.
 const FUNCTION_CALL_SCHEMA_ARRAY = `{"type":"array","items":{"properties":{"arguments":{"title":"Arguments","type":"object"},"name":{"title":"Name","type":"string"}},"required":["arguments","name"],"title":"FunctionCall","type":"object"}}`;
 
 function buildToolsSystemPrompt(tools: unknown[]): string {
@@ -64,7 +65,7 @@ export function isWebGPUSupported(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
-async function* parseHermesStream(
+async function* parseToolCallStream(
   stream: AsyncIterable<any>,
 ): AsyncIterable<StreamChunk> {
   // The engine streams content deltas holding the JSON array. Suppress them
@@ -83,14 +84,14 @@ async function* parseHermesStream(
       const raw = JSON.parse(buffer);
       if (Array.isArray(raw)) parsed = raw;
     } catch (err) {
-      log.warn("hermes stream: JSON parse failed, treating as empty tool-calls", {
+      log.warn("tool-call stream: JSON parse failed, treating as empty tool-calls", {
         bufferBytes: buffer.length,
         error: (err as Error).message,
       });
       // Fall through with empty array; tool-loop will issue a follow-up.
     }
   }
-  log.info("hermes stream parsed", {
+  log.info("tool-call stream parsed", {
     finish,
     bufferBytes: buffer.length,
     toolCalls: parsed.length,
@@ -122,12 +123,6 @@ export async function loadWebLLM(
   }
   log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
   const webllm = await import("@mlc-ai/web-llm");
-  const manualTransform = needsManualTransform(modelId);
-  log.info("loadWebLLM: path decided", { manualTransform, nativeToolCalling: !manualTransform });
-  if (manualTransform && !webllm.functionCallingModelIds.includes(modelId)) {
-    log.info("patching functionCallingModelIds to allow manual-transform model", { modelId });
-    webllm.functionCallingModelIds.push(modelId);
-  }
   const endLoad = log.time("CreateMLCEngine (first run downloads weights)");
   const engine = await webllm.CreateMLCEngine(modelId, {
     initProgressCallback: (r) => {
@@ -150,7 +145,6 @@ export async function loadWebLLM(
       hasTools,
       toolCount: tools.length,
       messageCount: messages.length,
-      manualTransform,
       sampling: samplingOpts,
     });
     if (!hasTools) {
@@ -161,23 +155,11 @@ export async function loadWebLLM(
       });
       return stream as unknown as AsyncIterable<StreamChunk>;
     }
-    if (!manualTransform) {
-      // Native path: let web-llm handle the Hermes-2-Pro/3 tool transformation.
-      const stream = await engine.chat.completions.create({
-        messages: messages as any,
-        tools: tools as any,
-        tool_choice: "auto",
-        stream: true,
-        ...samplingOpts,
-      });
-      return stream as unknown as AsyncIterable<StreamChunk>;
-    }
-    // Hermes-2-Pro-style transformation: inject system prompt describing the
-    // tools, constrain output to the function-call JSON-array schema, and do
-    // NOT pass `tools` through (we've already encoded them into the prompt
-    // and grammar).
-    // Preserve any app-level system messages by prepending them before the
-    // Hermes tool-calling prompt so the app's guidance still reaches the model.
+    // Inject the tools-describing system prompt and grammar-constrain the
+    // output to a JSON array of `{name, arguments}` objects. We do NOT pass
+    // `tools` through — the schema has already encoded them.
+    // Preserve any app-level system messages by prepending them so the app's
+    // guidance still reaches the model.
     const toolsPrompt = buildToolsSystemPrompt(tools);
     const appSystem = messages
       .filter((m) => m.role === "system")
@@ -188,7 +170,7 @@ export async function loadWebLLM(
       { role: "system", content: systemPrompt },
       ...messages.filter((m) => m.role !== "system"),
     ];
-    log.debug("manual hermes transform", {
+    log.debug("tool-call transform", {
       systemPromptChars: systemPrompt.length,
       nonSystemMessages: withSystem.length - 1,
     });
@@ -198,6 +180,6 @@ export async function loadWebLLM(
       stream: true,
       ...samplingOpts,
     });
-    return parseHermesStream(stream as any);
+    return parseToolCallStream(stream as any);
   };
 }

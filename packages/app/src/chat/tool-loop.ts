@@ -188,7 +188,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
       });
 
       if (finish === "tool_calls" && pending.size === 0) {
-        // Hermes-style schema-constrained `[]` output. Two sub-cases:
+        // Schema-constrained `[]` output. Two sub-cases:
         // 1. Stall before substantive work — one-time recovery: append a
         //    system reminder and retry with tools still enabled.
         // 2. Genuine done signal — one plain-text follow-up, then return.
