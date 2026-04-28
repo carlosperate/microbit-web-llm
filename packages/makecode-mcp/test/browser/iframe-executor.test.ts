@@ -22,7 +22,7 @@ function makeDriver(): DriverMocks {
       name: "microbit-spike",
       hex: ":020000040000FA\n:00000001FF\n",
     })),
-    renderBlocks: vi.fn(async (_code: string) => "<svg>ok</svg>"),
+    renderBlocksImage: vi.fn(async (_code: string) => "iVBORw0KGgo="),
   };
 }
 
@@ -67,14 +67,14 @@ describe("IframeExecutor — stateful tools", () => {
     await expect(exec.getCurrentCode()).resolves.toBe("hello");
   });
 
-  it("getBlocksSvg on empty editor throws LLM-directed message", async () => {
-    await expect(exec.getBlocksSvg()).rejects.toThrow(
+  it("getBlocksImage on empty editor throws LLM-directed message", async () => {
+    await expect(exec.getBlocksImage()).rejects.toThrow(
       /No code loaded in the editor\. Call set_code first/,
     );
-    expect(driver.renderBlocks).not.toHaveBeenCalled();
+    expect(driver.renderBlocksImage).not.toHaveBeenCalled();
   });
 
-  it("getBlocksSvg renders the loaded code", async () => {
+  it("getBlocksImage renders the loaded code as a PNG", async () => {
     driver.getProject.mockResolvedValueOnce({
       text: {
         "main.ts": "basic.forever(() => {})",
@@ -83,9 +83,9 @@ describe("IframeExecutor — stateful tools", () => {
         "README.md": " ",
       },
     });
-    const svg = await exec.getBlocksSvg();
-    expect(svg).toBe("<svg>ok</svg>");
-    expect(driver.renderBlocks).toHaveBeenCalledWith("basic.forever(() => {})");
+    const img = await exec.getBlocksImage();
+    expect(img).toEqual({ pngBase64: "iVBORw0KGgo=" });
+    expect(driver.renderBlocksImage).toHaveBeenCalledWith("basic.forever(() => {})");
   });
 
   it("getHexFile compiles and base64-encodes the hex text", async () => {
@@ -114,10 +114,10 @@ describe("IframeExecutor — stateless _from_code tools", () => {
     exec = new IframeExecutor(driver);
   });
 
-  it("getBlocksSvgFromCode renders without touching editor state", async () => {
-    const svg = await exec.getBlocksSvgFromCode("basic.showNumber(1)");
-    expect(svg).toBe("<svg>ok</svg>");
-    expect(driver.renderBlocks).toHaveBeenCalledWith("basic.showNumber(1)");
+  it("getBlocksImageFromCode renders without touching editor state", async () => {
+    const img = await exec.getBlocksImageFromCode("basic.showNumber(1)");
+    expect(img).toEqual({ pngBase64: "iVBORw0KGgo=" });
+    expect(driver.renderBlocksImage).toHaveBeenCalledWith("basic.showNumber(1)");
     expect(driver.setProject).not.toHaveBeenCalled();
     expect(driver.getProject).not.toHaveBeenCalled();
   });

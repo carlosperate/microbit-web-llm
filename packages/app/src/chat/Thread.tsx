@@ -87,7 +87,7 @@ function ToolCallView({
   isError?: boolean;
 }) {
   const resultText = result === undefined ? null : typeof result === "string" ? result : JSON.stringify(result);
-  const isSvg = typeof resultText === "string" && resultText.trim().startsWith("<svg");
+  const pngBase64 = !isError ? extractPngBase64(resultText) : null;
   return (
     <details className={`tool-call ${isError ? "tool-call-error" : ""}`}>
       <summary>
@@ -101,8 +101,13 @@ function ToolCallView({
         {resultText !== null && (
           <div className="tool-call-result">
             <strong>result:</strong>
-            {isSvg ? (
-              <div className="tool-call-svg" dangerouslySetInnerHTML={{ __html: resultText }} />
+            {pngBase64 ? (
+              <div className="tool-call-image">
+                <img
+                  src={`data:image/png;base64,${pngBase64}`}
+                  alt="MakeCode blocks"
+                />
+              </div>
             ) : (
               <pre>{truncate(resultText, 2000)}</pre>
             )}
@@ -111,6 +116,19 @@ function ToolCallView({
       </div>
     </details>
   );
+}
+
+function extractPngBase64(resultText: string | null): string | null {
+  if (!resultText) return null;
+  const trimmed = resultText.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    const png = parsed?.pngBase64;
+    return typeof png === "string" && png.length > 0 ? png : null;
+  } catch {
+    return null;
+  }
 }
 
 function truncate(s: string, n: number) {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Mock createMakeCodeRenderBlocks before importing the adapter
 const mockRenderBlocks = vi.fn(async ({ code }: { code: string }) => ({
-  svg: `<svg>${code}</svg>`,
+  svg: `<svg width="40" height="20">${code}</svg>`,
 }));
 const mockRenderer = {
   initialize: vi.fn(),
@@ -11,6 +11,11 @@ const mockRenderer = {
 };
 vi.mock("@microbit/makecode-embed/vanilla", () => ({
   createMakeCodeRenderBlocks: vi.fn(() => mockRenderer),
+}));
+
+// Mock the canvas-based SVG→PNG helper so this test can stay in jsdom.
+vi.mock("../../src/shared/svg-to-png.ts", () => ({
+  svgToPngBase64: vi.fn(async (svg: string) => `png(${svg})`),
 }));
 
 import { MakeCodeFrameDriverAdapter } from "../../src/browser/frame-driver-adapter.ts";
@@ -54,12 +59,12 @@ describe("MakeCodeFrameDriverAdapter", () => {
     adapter = new MakeCodeFrameDriverAdapter(driver);
   });
 
-  it("initializes the blocks renderer lazily on first renderBlocks call", async () => {
+  it("initializes the blocks renderer lazily on first renderBlocksImage call", async () => {
     expect(mockRenderer.initialize).not.toHaveBeenCalled();
-    await adapter.renderBlocks("basic.showString('hi')");
+    await adapter.renderBlocksImage("basic.showString('hi')");
     expect(mockRenderer.initialize).toHaveBeenCalledOnce();
     // Second call reuses the same renderer instance
-    await adapter.renderBlocks("basic.showString('hi')");
+    await adapter.renderBlocksImage("basic.showString('hi')");
     expect(mockRenderer.initialize).toHaveBeenCalledOnce();
   });
 
@@ -109,15 +114,15 @@ describe("MakeCodeFrameDriverAdapter", () => {
     });
   });
 
-  it("renderBlocks uses createMakeCodeRenderBlocks and returns svg", async () => {
-    const out = await adapter.renderBlocks("basic.showNumber(1)");
+  it("renderBlocksImage uses createMakeCodeRenderBlocks and returns a PNG base64", async () => {
+    const out = await adapter.renderBlocksImage("basic.showNumber(1)");
     expect(mockRenderBlocks).toHaveBeenCalledWith({ code: "basic.showNumber(1)" });
-    expect(out).toBe("<svg>basic.showNumber(1)</svg>");
+    expect(out).toBe('png(<svg width="40" height="20">basic.showNumber(1)</svg>)');
   });
 
-  it("renderBlocks returns empty string when svg is undefined", async () => {
+  it("renderBlocksImage returns empty string when svg is undefined", async () => {
     mockRenderBlocks.mockResolvedValueOnce({});
-    const out = await adapter.renderBlocks("x");
+    const out = await adapter.renderBlocksImage("x");
     expect(out).toBe("");
   });
 

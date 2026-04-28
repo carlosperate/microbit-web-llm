@@ -30,11 +30,11 @@ export class PuppeteerDriver implements MakeCodeDriver {
     }>;
   }
 
-  renderBlocks(code: string): Promise<string> {
+  renderBlocksImage(code: string): Promise<string> {
     return this.page.evaluate(
       (c: unknown) =>
-        (window as unknown as { __mkcp: { renderBlocks(c: unknown): Promise<string> } })
-          .__mkcp.renderBlocks(c),
+        (window as unknown as { __mkcp: { renderBlocksImage(c: unknown): Promise<string> } })
+          .__mkcp.renderBlocksImage(c),
       code,
     ) as Promise<string>;
   }

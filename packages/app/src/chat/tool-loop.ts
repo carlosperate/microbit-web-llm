@@ -76,9 +76,9 @@ interface PendingToolCall {
 const SUBSTANTIVE_TOOLS = new Set([
   "set_code",
   "get_current_code",
-  "get_blocks_svg",
+  "get_blocks_image",
   "get_hex_file",
-  "get_blocks_svg_from_code",
+  "get_blocks_image_from_code",
   "get_hex_file_from_code",
 ]);
 
@@ -87,7 +87,7 @@ const SUBSTANTIVE_TOOLS = new Set([
 // describing the tool calls inside a TypeScript code block instead of
 // actually calling them.
 const STALL_REMINDER =
-  "[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: set_code with the program, then get_blocks_svg to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.";
+  "[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: set_code with the program, then get_blocks_image to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.";
 
 function accumulateToolCalls(
   acc: Map<number, PendingToolCall>,
@@ -114,12 +114,14 @@ async function dispatchTool(
     case "set_code":
       await executor.setCode(args.code as string);
       return JSON.stringify({ ok: true });
-    case "get_blocks_svg":
-      return await executor.getBlocksSvg();
+    case "get_blocks_image":
+      return JSON.stringify(await executor.getBlocksImage());
     case "get_hex_file":
       return await executor.getHexFile();
-    case "get_blocks_svg_from_code":
-      return await executor.getBlocksSvgFromCode(args.code as string);
+    case "get_blocks_image_from_code":
+      return JSON.stringify(
+        await executor.getBlocksImageFromCode(args.code as string),
+      );
     case "get_hex_file_from_code":
       return await executor.getHexFileFromCode(args.code as string);
     default:

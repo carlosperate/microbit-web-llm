@@ -7,13 +7,13 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toMatch(/assistant/i);
   });
 
-  it("describes the set_code + get_blocks_svg multi-turn pattern", () => {
+  it("describes the set_code + get_blocks_image multi-turn pattern", () => {
     expect(SYSTEM_PROMPT).toMatch(/set_code/);
-    expect(SYSTEM_PROMPT).toMatch(/get_blocks_svg/);
+    expect(SYSTEM_PROMPT).toMatch(/get_blocks_image/);
   });
 
-  it("mentions the stateless get_blocks_svg_from_code variant for previewing snippets", () => {
-    expect(SYSTEM_PROMPT).toMatch(/get_blocks_svg_from_code/);
+  it("mentions the stateless get_blocks_image_from_code variant for previewing snippets", () => {
+    expect(SYSTEM_PROMPT).toMatch(/get_blocks_image_from_code/);
   });
 
   it("does not reference session lifecycle — the iframe is the session", () => {

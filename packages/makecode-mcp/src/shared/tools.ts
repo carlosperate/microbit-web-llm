@@ -41,7 +41,7 @@ const loadedServerHint =
 // ─── Browser target ─────────────────────────────────────────────────────────
 // One executor per iframe; the iframe *is* the session. No start/end lifecycle,
 // no session_id on any tool. Stateful tools (set_code, get_current_code,
-// get_blocks_svg, get_hex_file) act on the iframe's current state directly.
+// get_blocks_image, get_hex_file) act on the iframe's current state directly.
 
 export const browserTools: ToolDescriptor[] = [
   {
@@ -63,7 +63,7 @@ export const browserTools: ToolDescriptor[] = [
     function: {
       name: "set_code",
       description:
-        "Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: get_blocks_svg to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image.",
+        "Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image.",
       parameters: {
         type: "object",
         properties: { ...CODE_PROP },
@@ -75,8 +75,8 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_svg",
-      description: `Render the code currently loaded in the editor as a blocks SVG. ${loadedBrowserHint}`,
+      name: "get_blocks_image",
+      description: `Render the code currently loaded in the editor as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedBrowserHint}`,
       parameters: {
         type: "object",
         properties: {},
@@ -101,9 +101,9 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_svg_from_code",
+      name: "get_blocks_image_from_code",
       description:
-        "Render the given TypeScript as a blocks SVG without loading it into the editor. Useful for previewing code snippets while the user is still discussing changes.",
+        "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks without loading it into the editor. Useful for previewing code snippets while the user is still discussing changes.",
       parameters: {
         type: "object",
         properties: { ...CODE_PROP },
@@ -140,7 +140,7 @@ export const serverTools: ToolDescriptor[] = [
     function: {
       name: "start_session",
       description:
-        "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_svg, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
+        "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_image, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
       parameters: {
         type: "object",
         properties: {},
@@ -180,7 +180,7 @@ export const serverTools: ToolDescriptor[] = [
     type: "function",
     function: {
       name: "set_code",
-      description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: get_blocks_svg to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image. ${noSessionHint}`,
+      description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image. ${noSessionHint}`,
       parameters: {
         type: "object",
         properties: {
@@ -195,8 +195,8 @@ export const serverTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_svg",
-      description: `Render the currently-loaded code as a blocks SVG. ${loadedServerHint} ${noSessionHint}`,
+      name: "get_blocks_image",
+      description: `Render the currently-loaded code as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedServerHint} ${noSessionHint}`,
       parameters: {
         type: "object",
         properties: { ...SESSION_ID_PROP },
@@ -221,9 +221,9 @@ export const serverTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_svg_from_code",
+      name: "get_blocks_image_from_code",
       description:
-        "Render the given TypeScript as a blocks SVG. Stateless — does not touch any session.",
+        "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks. Stateless — does not touch any session.",
       parameters: {
         type: "object",
         properties: { ...CODE_PROP },

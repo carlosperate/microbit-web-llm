@@ -7,9 +7,9 @@ function makeExecutor(overrides: Partial<BrowserExecutor> = {}): BrowserExecutor
   return {
     getCurrentCode: vi.fn(async () => ""),
     setCode: vi.fn(async () => {}),
-    getBlocksSvg: vi.fn(async () => "<svg></svg>"),
+    getBlocksImage: vi.fn(async () => ({ pngBase64: "iVBORw0KGgo=" })),
     getHexFile: vi.fn(async () => "aGV4"),
-    getBlocksSvgFromCode: vi.fn(async () => "<svg/>"),
+    getBlocksImageFromCode: vi.fn(async () => ({ pngBase64: "iVBORw0KGgo=" })),
     getHexFileFromCode: vi.fn(async () => "aGV4"),
     ...overrides,
   };
@@ -102,7 +102,7 @@ describe("runToolLoop", () => {
           chunk({
             tool_calls: [
               { index: 0, id: "a", function: { name: "get_current_code", arguments: "{}" } },
-              { index: 1, id: "b", function: { name: "get_blocks_svg", arguments: "{}" } },
+              { index: 1, id: "b", function: { name: "get_blocks_image", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -120,14 +120,14 @@ describe("runToolLoop", () => {
       // drain
     }
     expect(executor.getCurrentCode).toHaveBeenCalledOnce();
-    expect(executor.getBlocksSvg).toHaveBeenCalledOnce();
+    expect(executor.getBlocksImage).toHaveBeenCalledOnce();
   });
 
-  it("passes get_blocks_svg_from_code through as a stateless render", async () => {
+  it("passes get_blocks_image_from_code through as a stateless render", async () => {
     // Useful for previewing a snippet while the user is still discussing
     // changes, before anything is loaded into the editor.
     const executor = makeExecutor({
-      getBlocksSvgFromCode: vi.fn(async (c: string) => `<svg>${c}</svg>`),
+      getBlocksImageFromCode: vi.fn(async (_c: string) => ({ pngBase64: "iVBORw0KGgoZ" })),
     });
     let turn = 0;
     const engine: ChatCompletionFn = async () => {
@@ -139,7 +139,7 @@ describe("runToolLoop", () => {
               {
                 index: 0,
                 id: "p1",
-                function: { name: "get_blocks_svg_from_code", arguments: '{"code":"basic.showNumber(42)"}' },
+                function: { name: "get_blocks_image_from_code", arguments: '{"code":"basic.showNumber(42)"}' },
               },
             ],
           }),
@@ -157,15 +157,15 @@ describe("runToolLoop", () => {
     })) {
       // drain
     }
-    expect(executor.getBlocksSvgFromCode).toHaveBeenCalledWith("basic.showNumber(42)");
+    expect(executor.getBlocksImageFromCode).toHaveBeenCalledWith("basic.showNumber(42)");
     expect(executor.setCode).not.toHaveBeenCalled();
   });
 
   it("returns a structured tool error when the executor throws", async () => {
     const executor = makeExecutor({
-      getBlocksSvg: vi.fn(async () => {
+      getBlocksImage: vi.fn(async () => {
         throw new Error(
-          "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_svg.",
+          "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_image.",
         );
       }),
     });
@@ -178,7 +178,7 @@ describe("runToolLoop", () => {
         return asStream([
           chunk({
             tool_calls: [
-              { index: 0, id: "c", function: { name: "get_blocks_svg", arguments: "{}" } },
+              { index: 0, id: "c", function: { name: "get_blocks_image", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),

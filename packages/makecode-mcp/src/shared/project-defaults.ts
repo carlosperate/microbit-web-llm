@@ -1,5 +1,5 @@
 export const EMPTY_EDITOR_ERROR =
-  "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_svg.";
+  "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_image.";
 
 const DEFAULT_PXT_JSON = JSON.stringify(
   {

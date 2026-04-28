@@ -32,9 +32,9 @@ describe("browserTools", () => {
       [
         "get_current_code",
         "set_code",
-        "get_blocks_svg",
+        "get_blocks_image",
         "get_hex_file",
-        "get_blocks_svg_from_code",
+        "get_blocks_image_from_code",
         "get_hex_file_from_code",
       ].sort(),
     );
@@ -59,7 +59,7 @@ describe("browserTools", () => {
     }
   });
 
-  it.each(["get_current_code", "get_blocks_svg", "get_hex_file"])(
+  it.each(["get_current_code", "get_blocks_image", "get_hex_file"])(
     "stateful tool %s takes no arguments",
     (name) => {
       const t = browserTools.find((x) => x.function.name === name)!;
@@ -75,7 +75,7 @@ describe("browserTools", () => {
     expect(t.function.parameters.properties).not.toHaveProperty("session_id");
   });
 
-  it.each(["get_blocks_svg_from_code", "get_hex_file_from_code"])(
+  it.each(["get_blocks_image_from_code", "get_hex_file_from_code"])(
     "stateless tool %s requires only `code`",
     (name) => {
       const t = browserTools.find((x) => x.function.name === name)!;
@@ -87,7 +87,7 @@ describe("browserTools", () => {
 
   it("set_code description hints at natural follow-ups", () => {
     const t = browserTools.find((x) => x.function.name === "set_code")!;
-    expect(t.function.description).toMatch(/get_blocks_svg|get_hex_file/);
+    expect(t.function.description).toMatch(/get_blocks_image|get_hex_file/);
   });
 
   it("get_hex_file_from_code tells the caller it is unsupported on browser", () => {
@@ -111,9 +111,9 @@ describe("serverTools", () => {
         "end_session",
         "get_current_code",
         "set_code",
-        "get_blocks_svg",
+        "get_blocks_image",
         "get_hex_file",
-        "get_blocks_svg_from_code",
+        "get_blocks_image_from_code",
         "get_hex_file_from_code",
       ].sort(),
     );
@@ -133,7 +133,7 @@ describe("serverTools", () => {
   it.each([
     "end_session",
     "get_current_code",
-    "get_blocks_svg",
+    "get_blocks_image",
     "get_hex_file",
   ])("stateful tool %s requires session_id only", (name) => {
     const t = serverTools.find((x) => x.function.name === name)!;
@@ -148,7 +148,7 @@ describe("serverTools", () => {
     );
   });
 
-  it.each(["get_blocks_svg_from_code", "get_hex_file_from_code"])(
+  it.each(["get_blocks_image_from_code", "get_hex_file_from_code"])(
     "session-less tool %s requires only code",
     (name) => {
       const t = serverTools.find((x) => x.function.name === name)!;
@@ -166,9 +166,19 @@ describe("serverTools", () => {
       expect(t.function.description).toMatch(/set_code|stateful/i);
     });
 
+    it("get_blocks_image description tells the model to call it after producing code", () => {
+      const t = serverTools.find((x) => x.function.name === "get_blocks_image")!;
+      expect(t.function.description).toMatch(/PNG|image/i);
+    });
+
+    it("describes the empty-editor guard", () => {
+      const t = serverTools.find((x) => x.function.name === "get_blocks_image")!;
+      expect(t.function.description).toMatch(/loaded|set_code/i);
+    });
+
     it("set_code suggests a natural follow-up tool", () => {
       const t = serverTools.find((x) => x.function.name === "set_code")!;
-      expect(t.function.description).toMatch(/get_blocks_svg|get_hex_file/);
+      expect(t.function.description).toMatch(/get_blocks_image|get_hex_file/);
     });
   });
 });

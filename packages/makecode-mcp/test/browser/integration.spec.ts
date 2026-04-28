@@ -34,30 +34,30 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByText(/get_current_code →.*roundtrip/)).toBeVisible({ timeout: 10_000 });
   });
 
-  test("get_blocks_svg_from_code opens the SVG modal with content", async ({ page }) => {
-    await clickButton(page, "get_blocks_svg_from_code");
+  test("get_blocks_image_from_code opens the PNG modal with content", async ({ page }) => {
+    await clickButton(page, "get_blocks_image_from_code");
 
     // Modal appears
-    await expect(page.getByTitle("blocks SVG")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
 
-    // Log entry reports a non-trivial SVG size (> 1 KB)
-    await expect(page.getByText(/get_blocks_svg_from_code → \d+\.\d+ KB/)).toBeVisible();
-    const sizeText = await page.getByText(/get_blocks_svg_from_code → \d+\.\d+ KB/).textContent();
+    // Log entry reports a non-trivial base64 size (> 1 KB)
+    await expect(page.getByText(/get_blocks_image_from_code → \d+\.\d+ KB/)).toBeVisible();
+    const sizeText = await page.getByText(/get_blocks_image_from_code → \d+\.\d+ KB/).textContent();
     const kb = parseFloat(sizeText!.match(/([\d.]+) KB/)![1]);
     expect(kb).toBeGreaterThan(1);
 
     // Close the modal
     await page.keyboard.press("Escape");
-    await expect(page.getByTitle("blocks SVG")).not.toBeVisible();
+    await expect(page.getByAltText("blocks PNG")).not.toBeVisible();
   });
 
-  test("get_blocks_svg (editor) opens the modal after set_code", async ({ page }) => {
+  test("get_blocks_image (editor) opens the modal after set_code", async ({ page }) => {
     await page.locator("textarea").fill('basic.showLeds(`# . . . #\n. # . # .\n. . # . .\n. # . # .\n# . . . #`)');
     await clickButton(page, "set_code");
     await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
 
-    await clickButton(page, "get_blocks_svg (editor)");
-    await expect(page.getByTitle("blocks SVG")).toBeVisible({ timeout: 30_000 });
+    await clickButton(page, "get_blocks_image (editor)");
+    await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
   });
 
   test("get_hex_file triggers a download with a valid hex file", async ({ page }) => {

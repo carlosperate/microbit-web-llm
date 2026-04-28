@@ -24,16 +24,16 @@ function fakeExecutor(): ServerExecutor {
     async setCode(sid) {
       if (sid !== active) throw new SessionError("unknown", "nope");
     },
-    async getBlocksSvg(sid) {
+    async getBlocksImage(sid) {
       if (sid !== active) throw new SessionError("unknown", "nope");
-      return "<svg/>";
+      return { pngBase64: "iVBORw0KGgo=" };
     },
     async getHexFile(sid) {
       if (sid !== active) throw new SessionError("unknown", "nope");
       return "aGV4";
     },
-    async getBlocksSvgFromCode() {
-      return "<svg>x</svg>";
+    async getBlocksImageFromCode() {
+      return { pngBase64: "iVBORw0KGgoX" };
     },
     async getHexFileFromCode() {
       return "aGV4Mg==";
@@ -82,12 +82,17 @@ describe("McpServer", () => {
     expect(parsed.error).toMatch(/nope/);
   });
 
-  it("get_blocks_svg_from_code passes code through", async () => {
+  it("get_blocks_image_from_code returns an MCP image content block", async () => {
     const res = await client.callTool({
-      name: "get_blocks_svg_from_code",
+      name: "get_blocks_image_from_code",
       arguments: { code: "x" },
     });
-    const text = (res.content as Array<{ type: string; text: string }>)[0].text;
-    expect(JSON.parse(text)).toEqual({ svg: "<svg>x</svg>" });
+    const content = res.content as Array<{ type: string; data?: string; mimeType?: string }>;
+    expect(content).toHaveLength(1);
+    expect(content[0]).toEqual({
+      type: "image",
+      data: "iVBORw0KGgoX",
+      mimeType: "image/png",
+    });
   });
 });

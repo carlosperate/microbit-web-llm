@@ -24,7 +24,7 @@ function makeDriver(): DriverMocks {
       name: "microbit",
       hex: ":020000040000FA\n:00000001FF\n",
     })),
-    renderBlocks: vi.fn(async (_code: string) => "<svg>ok</svg>"),
+    renderBlocksImage: vi.fn(async (_code: string) => "iVBORw0KGgo="),
   };
 }
 
@@ -144,15 +144,16 @@ describe("TabExecutor — stateful tools", () => {
     expect(d.setProject).toHaveBeenCalledOnce();
     const arg = d.setProject.mock.calls[0][0];
     expect(arg.text["main.ts"]).toBe("basic.showNumber(7)");
-    expect(arg.text["main.blocks"]).toBe("<b/>");
+    // main.blocks is intentionally cleared so MakeCode re-decompiles from main.ts.
+    expect(arg.text["main.blocks"]).toBe("");
     expect(arg.text["pxt.json"]).toBe('{"preferredEditor":"tsprj"}');
   });
 
-  it("getBlocksSvg on empty editor throws LLM-directed message", async () => {
-    await expect(exec.getBlocksSvg(sid)).rejects.toThrow(
+  it("getBlocksImage on empty editor throws LLM-directed message", async () => {
+    await expect(exec.getBlocksImage(sid)).rejects.toThrow(
       /No code loaded in the editor\. Call set_code first/,
     );
-    expect(handles[0].driver.renderBlocks).not.toHaveBeenCalled();
+    expect(handles[0].driver.renderBlocksImage).not.toHaveBeenCalled();
   });
 
   it("getHexFile compiles and base64-encodes", async () => {
@@ -165,15 +166,15 @@ describe("TabExecutor — stateful tools", () => {
 });
 
 describe("TabExecutor — stateless _from_code tools", () => {
-  it("getBlocksSvgFromCode uses a transient tab, not a session tab", async () => {
+  it("getBlocksImageFromCode uses a transient tab, not a session tab", async () => {
     const { pool, handles, transientDrivers } = makePool();
     const exec = new TabExecutor(pool);
-    const svg = await exec.getBlocksSvgFromCode('basic.showString("hi")');
-    expect(svg).toBe("<svg>ok</svg>");
+    const img = await exec.getBlocksImageFromCode('basic.showString("hi")');
+    expect(img).toEqual({ pngBase64: "iVBORw0KGgo=" });
     expect(pool.openTab).not.toHaveBeenCalled();
     expect(pool.withTransientTab).toHaveBeenCalledOnce();
     expect(handles).toHaveLength(0);
-    expect(transientDrivers[0].renderBlocks).toHaveBeenCalledWith(
+    expect(transientDrivers[0].renderBlocksImage).toHaveBeenCalledWith(
       'basic.showString("hi")',
     );
   });

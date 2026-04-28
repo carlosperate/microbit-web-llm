@@ -4,12 +4,13 @@ import {
   createMakeCodeRenderBlocks,
 } from "@microbit/makecode-embed/vanilla";
 import { fillProjectDefaults } from "../../shared/project-defaults.js";
+import { svgToPngBase64 } from "../../shared/svg-to-png.js";
 
 interface ShimApi {
   importProject(text: Record<string, string>): Promise<void>;
   saveProject(): Promise<{ text: Record<string, string> }>;
   compile(): Promise<{ name: string; hex: string }>;
-  renderBlocks(code: string): Promise<string>;
+  renderBlocksImage(code: string): Promise<string>;
 }
 
 declare global {
@@ -103,8 +104,10 @@ window.__mkcp = {
     await driver.compile();
     return waiter;
   },
-  async renderBlocks(code) {
+  async renderBlocksImage(code) {
     const result = await getRenderer().renderBlocks({ code });
-    return result.svg ?? "";
+    const svg = result.svg ?? "";
+    if (!svg) return "";
+    return svgToPngBase64(svg);
   },
 };

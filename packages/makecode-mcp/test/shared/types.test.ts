@@ -31,9 +31,9 @@ describe("BrowserExecutor interface (type-level)", () => {
     const mock: BrowserExecutor = {
       getCurrentCode: async () => "",
       setCode: async (_code: string) => {},
-      getBlocksSvg: async () => "<svg/>",
+      getBlocksImage: async () => ({ pngBase64: "" }),
       getHexFile: async () => "",
-      getBlocksSvgFromCode: async (_code: string) => "<svg/>",
+      getBlocksImageFromCode: async (_code: string) => ({ pngBase64: "" }),
       getHexFileFromCode: async (_code: string) => "",
     };
     expect(typeof mock.setCode).toBe("function");
@@ -49,9 +49,9 @@ describe("ServerExecutor interface (type-level)", () => {
       endSession: async (_sid: string) => {},
       getCurrentCode: async (_sid: string) => "",
       setCode: async (_sid: string, _code: string) => {},
-      getBlocksSvg: async (_sid: string) => "<svg/>",
+      getBlocksImage: async (_sid: string) => ({ pngBase64: "" }),
       getHexFile: async (_sid: string) => "",
-      getBlocksSvgFromCode: async (_code: string) => "<svg/>",
+      getBlocksImageFromCode: async (_code: string) => ({ pngBase64: "" }),
       getHexFileFromCode: async (_code: string) => "",
     };
     expect(typeof mock.startSession).toBe("function");

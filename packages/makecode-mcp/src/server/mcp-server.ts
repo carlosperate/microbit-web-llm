@@ -17,38 +17,53 @@ export interface McpServerOptions {
 }
 
 type ToolArgs = Record<string, unknown>;
-type Dispatch = (exec: ServerExecutor, a: ToolArgs) => Promise<unknown>;
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+type ToolResult = { content: ContentBlock[]; isError?: boolean };
+type Dispatch = (exec: ServerExecutor, a: ToolArgs) => Promise<ToolResult>;
 
 const sid = (a: ToolArgs) => String(a.session_id ?? "");
 const code = (a: ToolArgs) => String(a.code ?? "");
 
-const dispatch: Record<string, Dispatch> = {
-  start_session: (e) => e.startSession(),
-  end_session: async (e, a) => {
-    await e.endSession(sid(a));
-    return { ok: true };
-  },
-  get_current_code: async (e, a) => ({ code: await e.getCurrentCode(sid(a)) }),
-  set_code: async (e, a) => {
-    await e.setCode(sid(a), code(a));
-    return { ok: true };
-  },
-  get_blocks_svg: async (e, a) => ({ svg: await e.getBlocksSvg(sid(a)) }),
-  get_hex_file: async (e, a) => ({ hex_base64: await e.getHexFile(sid(a)) }),
-  get_blocks_svg_from_code: async (e, a) => ({
-    svg: await e.getBlocksSvgFromCode(code(a)),
-  }),
-  get_hex_file_from_code: async (e, a) => ({
-    hex_base64: await e.getHexFileFromCode(code(a)),
-  }),
-};
-
-function textResult(payload: unknown, isError = false) {
+function textResult(payload: unknown, isError = false): ToolResult {
   return {
     ...(isError ? { isError: true } : {}),
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
   };
 }
+
+function imageResult(pngBase64: string): ToolResult {
+  return {
+    content: [{ type: "image" as const, data: pngBase64, mimeType: "image/png" }],
+  };
+}
+
+const dispatch: Record<string, Dispatch> = {
+  start_session: async (e) => textResult(await e.startSession()),
+  end_session: async (e, a) => {
+    await e.endSession(sid(a));
+    return textResult({ ok: true });
+  },
+  get_current_code: async (e, a) =>
+    textResult({ code: await e.getCurrentCode(sid(a)) }),
+  set_code: async (e, a) => {
+    await e.setCode(sid(a), code(a));
+    return textResult({ ok: true });
+  },
+  get_blocks_image: async (e, a) => {
+    const { pngBase64 } = await e.getBlocksImage(sid(a));
+    return imageResult(pngBase64);
+  },
+  get_hex_file: async (e, a) =>
+    textResult({ hex_base64: await e.getHexFile(sid(a)) }),
+  get_blocks_image_from_code: async (e, a) => {
+    const { pngBase64 } = await e.getBlocksImageFromCode(code(a));
+    return imageResult(pngBase64);
+  },
+  get_hex_file_from_code: async (e, a) =>
+    textResult({ hex_base64: await e.getHexFileFromCode(code(a)) }),
+};
 
 export function buildMcpServer(options: McpServerOptions): Server {
   const server = new Server(
@@ -82,7 +97,7 @@ export function buildMcpServer(options: McpServerOptions): Server {
       return textResult({ error: `Unknown tool: ${name}` }, true);
     }
     try {
-      const result = textResult(await handler(options.executor, args));
+      const result = await handler(options.executor, args);
       end();
       log.info(`CallTool ← ${name} ok`);
       return result;

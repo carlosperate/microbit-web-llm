@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 // It intercepts all chat completions and replays a scripted transcript:
 //   1st call  → start_session tool call
 //   2nd call  → set_code tool call with a micro:bit program
-//   3rd call  → get_blocks_svg tool call
+//   3rd call  → get_blocks_image tool call
 //   4th call  → final text response
 const INIT_SCRIPT = `
 (() => {
@@ -48,7 +48,7 @@ const INIT_SCRIPT = `
         return "unknown";
       })();
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "get_blocks_svg", arguments: JSON.stringify({ session_id: sid }) } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "get_blocks_image", arguments: JSON.stringify({ session_id: sid }) } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
@@ -60,7 +60,7 @@ const INIT_SCRIPT = `
 })();
 `;
 
-test("full chat → set_code → get_blocks_svg flow using mocked WebLLM", async ({ page }) => {
+test("full chat → set_code → get_blocks_image flow using mocked WebLLM", async ({ page }) => {
   await page.addInitScript(INIT_SCRIPT);
   await page.goto("/");
 
@@ -77,13 +77,14 @@ test("full chat → set_code → get_blocks_svg flow using mocked WebLLM", async
   // Expect all four tool calls to appear in the assistant message.
   await expect(page.locator(".tool-call summary code", { hasText: "start_session" })).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(".tool-call summary code", { hasText: "set_code" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(".tool-call summary code", { hasText: "get_blocks_svg" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".tool-call summary code", { hasText: "get_blocks_image" })).toBeVisible({ timeout: 30_000 });
 
   // Final text reply streams in.
   await expect(page.locator(".message-assistant")).toContainText(/scrolls HI/, { timeout: 30_000 });
 
-  // Expand the get_blocks_svg call — its result should contain an <svg> (or an error if renderer wasn't available).
-  const svgCall = page.locator(".tool-call", { has: page.locator("summary code", { hasText: "get_blocks_svg" }) });
-  await svgCall.locator("summary").click();
-  await expect(svgCall).toContainText(/<svg|No code loaded|session_id/i);
+  // Expand the get_blocks_image call — its result should contain a PNG <img>
+  // (or an error if the renderer wasn't available, e.g. no session in browser).
+  const imgCall = page.locator(".tool-call", { has: page.locator("summary code", { hasText: "get_blocks_image" }) });
+  await imgCall.locator("summary").click();
+  await expect(imgCall).toContainText(/pngBase64|No code loaded|session_id|data:image\/png/i);
 });

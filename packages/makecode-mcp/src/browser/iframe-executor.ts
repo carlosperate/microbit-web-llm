@@ -1,4 +1,4 @@
-import type { BrowserExecutor } from "../shared/types.js";
+import type { BrowserExecutor, BlocksImage } from "../shared/types.js";
 import {
   EMPTY_EDITOR_ERROR,
   fillProjectDefaults,
@@ -57,20 +57,20 @@ export class IframeExecutor implements BrowserExecutor {
     }
   }
 
-  async getBlocksSvg(): Promise<string> {
-    const end = log.time("getBlocksSvg");
+  async getBlocksImage(): Promise<BlocksImage> {
+    const end = log.time("getBlocksImage");
     try {
       const project = await this.driver.getProject();
       const code = project.text["main.ts"] ?? "";
       if (code.trim().length === 0) {
-        log.warn("getBlocksSvg → editor empty, throwing for LLM self-correction");
+        log.warn("getBlocksImage → editor empty, throwing for LLM self-correction");
         throw new Error(EMPTY_EDITOR_ERROR);
       }
-      const svg = await this.driver.renderBlocks(code);
-      log.info("getBlocksSvg → ok", { svgBytes: svg.length });
-      return svg;
+      const pngBase64 = await this.driver.renderBlocksImage(code);
+      log.info("getBlocksImage → ok", { pngBytes: pngBase64.length });
+      return { pngBase64 };
     } catch (err) {
-      if ((err as Error).message !== EMPTY_EDITOR_ERROR) log.error("getBlocksSvg → error", err);
+      if ((err as Error).message !== EMPTY_EDITOR_ERROR) log.error("getBlocksImage → error", err);
       throw err;
     } finally {
       end();
@@ -92,15 +92,15 @@ export class IframeExecutor implements BrowserExecutor {
     }
   }
 
-  async getBlocksSvgFromCode(code: string): Promise<string> {
-    const end = log.time("getBlocksSvgFromCode");
-    log.info("getBlocksSvgFromCode", { length: code.length, preview: preview(code) });
+  async getBlocksImageFromCode(code: string): Promise<BlocksImage> {
+    const end = log.time("getBlocksImageFromCode");
+    log.info("getBlocksImageFromCode", { length: code.length, preview: preview(code) });
     try {
-      const svg = await this.driver.renderBlocks(code);
-      log.info("getBlocksSvgFromCode → ok", { svgBytes: svg.length });
-      return svg;
+      const pngBase64 = await this.driver.renderBlocksImage(code);
+      log.info("getBlocksImageFromCode → ok", { pngBytes: pngBase64.length });
+      return { pngBase64 };
     } catch (err) {
-      log.error("getBlocksSvgFromCode → error", err);
+      log.error("getBlocksImageFromCode → error", err);
       throw err;
     } finally {
       end();

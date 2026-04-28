@@ -3,71 +3,18 @@ import { createRoot } from "react-dom/client";
 import { MakeCodePanel } from "../../src/browser/MakeCodePanel.js";
 import type { BrowserExecutor } from "../../src/shared/types.js";
 
-function cropSvgToContent(svgString: string, padding = 20): string {
-  // Position off-screen so the browser performs full layout (required for getBBox).
-  const wrap = document.createElement("div");
-  wrap.style.cssText = "position:fixed;top:-9999px;left:-9999px;visibility:hidden;pointer-events:none";
-  document.body.appendChild(wrap);
-  try {
-    wrap.innerHTML = svgString;
-    const svg = wrap.querySelector("svg");
-    if (!svg) return svgString;
-
-    const contentEl =
-      svg.querySelector<SVGGraphicsElement>("g.blocklyBlockCanvas") ??
-      svg.querySelector<SVGGraphicsElement>("g[class*='blockly']") ??
-      svg;
-
-    let box: DOMRect;
-    try {
-      box = contentEl.getBBox();
-    } catch {
-      return svgString;
-    }
-
-    if (box.width === 0 || box.height === 0) return svgString;
-
-    const x = box.x - padding;
-    const y = box.y - padding;
-    const w = box.width + padding * 2;
-    const h = box.height + padding * 2;
-
-    svg.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
-    svg.setAttribute("width", String(w));
-    svg.setAttribute("height", String(h));
-
-    return wrap.innerHTML;
-  } finally {
-    wrap.remove();
-  }
-}
-
 const SAMPLE_CODE = `basic.forever(function() {
     basic.showNumber(input.temperature())
     basic.pause(1000)
 })`;
 
-function SvgModal({ svg, onClose }: { svg: string; onClose: () => void }) {
-  const blobUrl = useMemo(() => {
-    // Wrap in HTML so the browser parses it as HTML, not XML.
-    // XML-mode rejects HTML entities like &nbsp; that MakeCode SVGs contain.
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:#fff;display:flex;align-items:flex-start;}</style></head><body>${svg}</body></html>`;
-    const blob = new Blob([html], { type: "text/html" });
-    return URL.createObjectURL(blob);
-  }, [svg]);
-
-  useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
-
+function ImageModal({ pngBase64, onClose }: { pngBase64: string; onClose: () => void }) {
+  const dataUrl = `data:image/png;base64,${pngBase64}`;
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
-
-  const openInNewTab = () => {
-    // Open in a new tab using the same HTML-wrapped blob so it renders correctly.
-    window.open(blobUrl, "_blank");
-  };
 
   return (
     <div
@@ -84,7 +31,6 @@ function SvgModal({ svg, onClose }: { svg: string; onClose: () => void }) {
         padding: 40,
       }}
     >
-      {/* toolbar */}
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -97,9 +43,8 @@ function SvgModal({ svg, onClose }: { svg: string; onClose: () => void }) {
           color: "#fff",
         }}
       >
-        <span>{(svg.length / 1024).toFixed(1)} KB</span>
         <button
-          onClick={openInNewTab}
+          onClick={() => window.open(dataUrl, "_blank")}
           style={{ padding: "4px 10px", cursor: "pointer", borderRadius: 4, border: "none", background: "#fff" }}
         >
           Open in new tab
@@ -111,19 +56,11 @@ function SvgModal({ svg, onClose }: { svg: string; onClose: () => void }) {
           Close (Esc)
         </button>
       </div>
-
-      {/* SVG rendered in iframe so external CSS/fonts load correctly */}
-      <iframe
+      <img
         onClick={(e) => e.stopPropagation()}
-        src={blobUrl}
-        title="blocks SVG"
-        style={{
-          background: "#fff",
-          borderRadius: 8,
-          border: "none",
-          width: "90vw",
-          height: "80vh",
-        }}
+        src={dataUrl}
+        alt="blocks PNG"
+        style={{ background: "#fff", borderRadius: 8, maxWidth: "90vw", maxHeight: "80vh" }}
       />
     </div>
   );
@@ -134,7 +71,7 @@ function App() {
   const [ready, setReady] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [code, setCode] = useState(SAMPLE_CODE);
-  const [modalSvg, setModalSvg] = useState<string | null>(null);
+  const [modalPng, setModalPng] = useState<string | null>(null);
 
   const append = (msg: string) =>
     setLog((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
@@ -168,25 +105,24 @@ function App() {
     }
   };
 
-  const showSvg = (svg: string, label: string) => {
-    const cropped = cropSvgToContent(svg);
-    setModalSvg(cropped);
-    append(`${label} → ${(svg.length / 1024).toFixed(1)} KB — showing modal`);
+  const showImage = (pngBase64: string, label: string) => {
+    setModalPng(pngBase64);
+    append(`${label} → ${(pngBase64.length / 1024).toFixed(1)} KB base64 — showing modal`);
   };
 
-  const handleGetSvg = async () => {
+  const handleGetImage = async () => {
     try {
-      const result = await exec().getBlocksSvg();
-      showSvg(result, "get_blocks_svg");
+      const { pngBase64 } = await exec().getBlocksImage();
+      showImage(pngBase64, "get_blocks_image");
     } catch (e) {
       append(`ERROR: ${e}`);
     }
   };
 
-  const handleGetSvgFromCode = async () => {
+  const handleGetImageFromCode = async () => {
     try {
-      const result = await exec().getBlocksSvgFromCode(code);
-      showSvg(result, "get_blocks_svg_from_code");
+      const { pngBase64 } = await exec().getBlocksImageFromCode(code);
+      showImage(pngBase64, "get_blocks_image_from_code");
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -221,8 +157,8 @@ function App() {
 
   return (
     <>
-      {modalSvg && (
-        <SvgModal svg={modalSvg} onClose={() => setModalSvg(null)} />
+      {modalPng && (
+        <ImageModal pngBase64={modalPng} onClose={() => setModalPng(null)} />
       )}
 
       <div style={{ display: "flex", height: "100%" }}>
@@ -264,11 +200,11 @@ function App() {
 
           <hr />
 
-          <button style={btn(ready)} disabled={!ready} onClick={handleGetSvg}>
-            get_blocks_svg (editor)
+          <button style={btn(ready)} disabled={!ready} onClick={handleGetImage}>
+            get_blocks_image (editor)
           </button>
-          <button style={btn(ready)} disabled={!ready} onClick={handleGetSvgFromCode}>
-            get_blocks_svg_from_code
+          <button style={btn(ready)} disabled={!ready} onClick={handleGetImageFromCode}>
+            get_blocks_image_from_code
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetHex}>
             get_hex_file (download)

@@ -195,14 +195,18 @@ body {
   max-height: 200px;
   overflow: auto;
 }
-.tool-call-svg {
+.tool-call-image {
   background: #fff;
   padding: 0.4rem;
   border-radius: 4px;
   max-height: 260px;
   overflow: auto;
 }
-.tool-call-svg svg { max-width: 100%; height: auto; }
+.tool-call-image img {
+  max-width: 100%;
+  height: auto;
+  image-rendering: -webkit-optimize-contrast;
+}
 
 .composer {
   display: flex;

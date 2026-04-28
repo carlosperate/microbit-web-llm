@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { MakeCodeDriver } from "../browser/driver-port.js";
-import type { ServerExecutor, StartSessionResult } from "../shared/types.js";
+import type {
+  BlocksImage,
+  ServerExecutor,
+  StartSessionResult,
+} from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
 import {
   EMPTY_EDITOR_ERROR,
@@ -56,12 +60,13 @@ export class TabExecutor implements ServerExecutor {
     });
   }
 
-  async getBlocksSvg(sessionId: string): Promise<string> {
+  async getBlocksImage(sessionId: string): Promise<BlocksImage> {
     const { driver } = this.requireSession(sessionId);
     const project = await driver.getProject();
     const code = project.text["main.ts"] ?? "";
     if (code.trim().length === 0) throw new Error(EMPTY_EDITOR_ERROR);
-    return driver.renderBlocks(code);
+    const pngBase64 = await driver.renderBlocksImage(code);
+    return { pngBase64 };
   }
 
   async getHexFile(sessionId: string): Promise<string> {
@@ -70,8 +75,11 @@ export class TabExecutor implements ServerExecutor {
     return toBase64(hex);
   }
 
-  async getBlocksSvgFromCode(code: string): Promise<string> {
-    return this.pool.withTransientTab((d) => d.renderBlocks(code));
+  async getBlocksImageFromCode(code: string): Promise<BlocksImage> {
+    const pngBase64 = await this.pool.withTransientTab((d) =>
+      d.renderBlocksImage(code),
+    );
+    return { pngBase64 };
   }
 
   async getHexFileFromCode(code: string): Promise<string> {

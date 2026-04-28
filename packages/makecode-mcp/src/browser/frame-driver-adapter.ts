@@ -1,5 +1,6 @@
 import { createMakeCodeRenderBlocks } from "@microbit/makecode-embed/vanilla";
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "./driver-port.js";
+import { svgToPngBase64 } from "../shared/svg-to-png.js";
 
 interface WorkspaceSaveEventLike {
   project: {
@@ -109,8 +110,10 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     }
   }
 
-  async renderBlocks(code: string): Promise<string> {
+  async renderBlocksImage(code: string): Promise<string> {
     const result = await this.getRenderer().renderBlocks({ code });
-    return result.svg ?? "";
+    const svg = result.svg ?? "";
+    if (!svg) return "";
+    return svgToPngBase64(svg);
   }
 }
