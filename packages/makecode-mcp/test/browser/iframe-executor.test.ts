@@ -122,9 +122,4 @@ describe("IframeExecutor — stateless _from_code tools", () => {
     expect(driver.getProject).not.toHaveBeenCalled();
   });
 
-  it("getHexFileFromCode is not supported on the browser target", async () => {
-    await expect(exec.getHexFileFromCode("x")).rejects.toThrow(
-      /not supported on the browser target/,
-    );
-  });
 });

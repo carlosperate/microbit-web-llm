@@ -65,9 +65,7 @@ export class TabExecutor implements ServerExecutor {
   }
 
   async getBlocksImageFromCode(code: string): Promise<BlocksImage> {
-    const pngBase64 = await this.pool.withTransientTab((d) =>
-      d.renderBlocksImage(code),
-    );
+    const pngBase64 = await this.pool.renderBlocksImage(code);
     return { pngBase64 };
   }
 

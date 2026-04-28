@@ -34,7 +34,6 @@ describe("BrowserExecutor interface (type-level)", () => {
       getBlocksImage: async () => ({ pngBase64: "" }),
       getHexFile: async () => "",
       getBlocksImageFromCode: async (_code: string) => ({ pngBase64: "" }),
-      getHexFileFromCode: async (_code: string) => "",
     };
     expect(typeof mock.setCode).toBe("function");
   });

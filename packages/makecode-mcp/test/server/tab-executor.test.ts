@@ -46,6 +46,7 @@ function makePool() {
       transientDrivers.push(driver);
       return fn(driver);
     }),
+    renderBlocksImage: vi.fn(async (_code: string) => "iVBORw0KGgo="),
     dispose: vi.fn(async () => {}),
   };
   return { pool, handles, transientDrivers };
@@ -166,17 +167,17 @@ describe("TabExecutor — stateful tools", () => {
 });
 
 describe("TabExecutor — stateless _from_code tools", () => {
-  it("getBlocksImageFromCode uses a transient tab, not a session tab", async () => {
-    const { pool, handles, transientDrivers } = makePool();
+  it("getBlocksImageFromCode uses the pool's render-only path, not a session or transient tab", async () => {
+    const { pool, handles } = makePool();
     const exec = new TabExecutor(pool);
     const img = await exec.getBlocksImageFromCode('basic.showString("hi")');
     expect(img).toEqual({ pngBase64: "iVBORw0KGgo=" });
     expect(pool.openTab).not.toHaveBeenCalled();
-    expect(pool.withTransientTab).toHaveBeenCalledOnce();
-    expect(handles).toHaveLength(0);
-    expect(transientDrivers[0].renderBlocksImage).toHaveBeenCalledWith(
+    expect(pool.withTransientTab).not.toHaveBeenCalled();
+    expect(pool.renderBlocksImage).toHaveBeenCalledWith(
       'basic.showString("hi")',
     );
+    expect(handles).toHaveLength(0);
   });
 
   it("getHexFileFromCode loads code in a transient tab, compiles, returns base64", async () => {

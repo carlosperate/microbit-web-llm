@@ -112,20 +112,6 @@ export const browserTools: ToolDescriptor[] = [
       },
     },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_hex_file_from_code",
-      description:
-        "Compile the given TypeScript and return the micro:bit .hex as a base64 string. Not supported on the browser target — use set_code + get_hex_file instead.",
-      parameters: {
-        type: "object",
-        properties: { ...CODE_PROP },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
-  },
 ];
 
 export const browserToolNames = browserTools.map((t) => t.function.name);

@@ -79,7 +79,6 @@ const SUBSTANTIVE_TOOLS = new Set([
   "get_blocks_image",
   "get_hex_file",
   "get_blocks_image_from_code",
-  "get_hex_file_from_code",
 ]);
 
 // Fires once if the model stalls (emits []) before doing any substantive work.
@@ -122,8 +121,6 @@ async function dispatchTool(
       return JSON.stringify(
         await executor.getBlocksImageFromCode(args.code as string),
       );
-    case "get_hex_file_from_code":
-      return await executor.getHexFileFromCode(args.code as string);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

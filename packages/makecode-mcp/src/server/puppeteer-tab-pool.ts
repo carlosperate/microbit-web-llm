@@ -7,6 +7,7 @@ import type { TabHandle, TabPool } from "./tab-pool.js";
 export class PuppeteerTabPool implements TabPool {
   private readonly browser: BrowserPool;
   private shellPromise: Promise<ShellServer> | null = null;
+  private renderPagePromise: Promise<PageLike> | null = null;
 
   constructor(launcher: BrowserLauncher) {
     this.browser = new BrowserPool(launcher);
@@ -24,6 +25,20 @@ export class PuppeteerTabPool implements TabPool {
     ]);
     await page.goto(shell.url, { waitUntil: "domcontentloaded" });
     return page;
+  }
+
+  private renderPage(): Promise<PageLike> {
+    if (!this.renderPagePromise) {
+      this.renderPagePromise = (async () => {
+        const [shell, page] = await Promise.all([
+          this.shell(),
+          this.browser.openPage(),
+        ]);
+        await page.goto(shell.renderUrl, { waitUntil: "domcontentloaded" });
+        return page;
+      })();
+    }
+    return this.renderPagePromise;
   }
 
   async openTab(): Promise<TabHandle> {
@@ -46,9 +61,25 @@ export class PuppeteerTabPool implements TabPool {
     }
   }
 
+  async renderBlocksImage(code: string): Promise<string> {
+    const page = await this.renderPage();
+    return page.evaluate(
+      (c: unknown) =>
+        (
+          window as unknown as {
+            __mkcp_render: { renderBlocksImage(c: unknown): Promise<string> };
+          }
+        ).__mkcp_render.renderBlocksImage(c),
+      code,
+    ) as Promise<string>;
+  }
+
   async dispose(): Promise<void> {
     const shell = this.shellPromise;
+    const renderPage = this.renderPagePromise;
     this.shellPromise = null;
+    this.renderPagePromise = null;
+    if (renderPage) await renderPage.then((p) => p.close()).catch(() => {});
     await this.browser.dispose();
     if (shell) await (await shell).close().catch(() => {});
   }

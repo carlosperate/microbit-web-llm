@@ -11,8 +11,8 @@ describe("browserTools", () => {
   // tool list does not include start_session / end_session and no tool
   // carries a session_id parameter.
 
-  it("exports exactly 6 tools", () => {
-    expect(browserTools).toHaveLength(6);
+  it("exports exactly 5 tools", () => {
+    expect(browserTools).toHaveLength(5);
   });
 
   it("every tool is an OpenAI function-calling descriptor", () => {
@@ -35,7 +35,6 @@ describe("browserTools", () => {
         "get_blocks_image",
         "get_hex_file",
         "get_blocks_image_from_code",
-        "get_hex_file_from_code",
       ].sort(),
     );
   });
@@ -75,24 +74,23 @@ describe("browserTools", () => {
     expect(t.function.parameters.properties).not.toHaveProperty("session_id");
   });
 
-  it.each(["get_blocks_image_from_code", "get_hex_file_from_code"])(
-    "stateless tool %s requires only `code`",
-    (name) => {
-      const t = browserTools.find((x) => x.function.name === name)!;
-      expect(t.function.parameters.required).toEqual(["code"]);
-      expect(t.function.parameters.properties).toHaveProperty("code");
-      expect(t.function.parameters.properties).not.toHaveProperty("session_id");
-    },
-  );
+  it("stateless tool get_blocks_image_from_code requires only `code`", () => {
+    const t = browserTools.find(
+      (x) => x.function.name === "get_blocks_image_from_code",
+    )!;
+    expect(t.function.parameters.required).toEqual(["code"]);
+    expect(t.function.parameters.properties).toHaveProperty("code");
+    expect(t.function.parameters.properties).not.toHaveProperty("session_id");
+  });
 
   it("set_code description hints at natural follow-ups", () => {
     const t = browserTools.find((x) => x.function.name === "set_code")!;
     expect(t.function.description).toMatch(/get_blocks_image|get_hex_file/);
   });
 
-  it("get_hex_file_from_code tells the caller it is unsupported on browser", () => {
-    const t = browserTools.find((x) => x.function.name === "get_hex_file_from_code")!;
-    expect(t.function.description).toMatch(/not supported|browser/i);
+  it("does NOT include get_hex_file_from_code (server-only tool)", () => {
+    const names = browserTools.map((t) => t.function.name);
+    expect(names).not.toContain("get_hex_file_from_code");
   });
 });
 

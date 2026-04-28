@@ -29,7 +29,6 @@ export interface BrowserExecutor {
   getBlocksImage(): Promise<BlocksImage>;
   getHexFile(): Promise<string>;
   getBlocksImageFromCode(code: string): Promise<BlocksImage>;
-  getHexFileFromCode(code: string): Promise<string>;
 }
 
 // Server target: one MCP server can multiplex many LLM clients, so sessions

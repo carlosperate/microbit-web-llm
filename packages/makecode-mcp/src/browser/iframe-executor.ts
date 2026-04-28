@@ -99,10 +99,4 @@ export class IframeExecutor implements BrowserExecutor {
     }
   }
 
-  async getHexFileFromCode(_code: string): Promise<string> {
-    log.warn("getHexFileFromCode called on browser target (not supported)");
-    throw new Error(
-      "get_hex_file_from_code is not supported on the browser target. Use set_code + get_hex_file instead.",
-    );
-  }
 }

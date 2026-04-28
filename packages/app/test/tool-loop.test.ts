@@ -10,7 +10,6 @@ function makeExecutor(overrides: Partial<BrowserExecutor> = {}): BrowserExecutor
     getBlocksImage: vi.fn(async () => ({ pngBase64: "iVBORw0KGgo=" })),
     getHexFile: vi.fn(async () => "aGV4"),
     getBlocksImageFromCode: vi.fn(async () => ({ pngBase64: "iVBORw0KGgo=" })),
-    getHexFileFromCode: vi.fn(async () => "aGV4"),
     ...overrides,
   };
 }
