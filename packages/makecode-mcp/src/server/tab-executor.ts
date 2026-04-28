@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type {
   BlocksImage,
   ServerExecutor,
   StartSessionResult,
 } from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
+import { fillProjectDefaults } from "../shared/project-defaults.js";
 import {
-  EMPTY_EDITOR_ERROR,
-  fillProjectDefaults,
-} from "../shared/project-defaults.js";
+  readCurrentCode,
+  renderCurrentBlocks,
+  writeCode,
+} from "../shared/executor-ops.js";
 import { createLogger } from "../shared/logger.js";
 import type { TabHandle, TabPool } from "./tab-pool.js";
 
@@ -44,29 +45,17 @@ export class TabExecutor implements ServerExecutor {
 
   async getCurrentCode(sessionId: string): Promise<string> {
     const { driver } = this.requireSession(sessionId);
-    const project = await driver.getProject();
-    return project.text["main.ts"] ?? "";
+    return readCurrentCode(driver);
   }
 
   async setCode(sessionId: string, code: string): Promise<void> {
     const { driver } = this.requireSession(sessionId);
-    const current = await driver.getProject();
-    // Drop main.blocks so the blocks view re-decompiles from the new main.ts.
-    // Otherwise MakeCode boots in blocks mode, renders the stale (empty) blocks
-    // XML, and overwrites main.ts with the decompiled result ("\n").
-    const { "main.blocks": _drop, ...rest } = current.text;
-    await driver.setProject({
-      text: { ...fillProjectDefaults(rest, code), "main.blocks": "" },
-    });
+    await writeCode(driver, code);
   }
 
   async getBlocksImage(sessionId: string): Promise<BlocksImage> {
     const { driver } = this.requireSession(sessionId);
-    const project = await driver.getProject();
-    const code = project.text["main.ts"] ?? "";
-    if (code.trim().length === 0) throw new Error(EMPTY_EDITOR_ERROR);
-    const pngBase64 = await driver.renderBlocksImage(code);
-    return { pngBase64 };
+    return renderCurrentBlocks(driver);
   }
 
   async getHexFile(sessionId: string): Promise<string> {

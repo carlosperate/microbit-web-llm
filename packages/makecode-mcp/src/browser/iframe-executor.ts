@@ -1,8 +1,10 @@
 import type { BrowserExecutor, BlocksImage } from "../shared/types.js";
+import { EMPTY_EDITOR_ERROR } from "../shared/project-defaults.js";
 import {
-  EMPTY_EDITOR_ERROR,
-  fillProjectDefaults,
-} from "../shared/project-defaults.js";
+  readCurrentCode,
+  renderCurrentBlocks,
+  writeCode,
+} from "../shared/executor-ops.js";
 import { createLogger, preview } from "../shared/logger.js";
 import type { MakeCodeDriver } from "./driver-port.js";
 
@@ -24,8 +26,7 @@ export class IframeExecutor implements BrowserExecutor {
   async getCurrentCode(): Promise<string> {
     const end = log.time("getCurrentCode");
     try {
-      const project = await this.driver.getProject();
-      const code = project.text["main.ts"] ?? "";
+      const code = await readCurrentCode(this.driver);
       log.info("getCurrentCode → ok", { length: code.length, preview: preview(code) });
       return code;
     } catch (err) {
@@ -40,14 +41,7 @@ export class IframeExecutor implements BrowserExecutor {
     const end = log.time("setCode");
     log.info("setCode", { length: code.length, preview: preview(code) });
     try {
-      const current = await this.driver.getProject();
-      // Drop main.blocks so the blocks view re-decompiles from the new main.ts.
-      // Keeping the previous main.blocks would cause the blocks editor to render
-      // stale blocks and ignore the TS update.
-      const { "main.blocks": _drop, ...rest } = current.text;
-      await this.driver.setProject({
-        text: { ...fillProjectDefaults(rest, code), "main.blocks": "" },
-      });
+      await writeCode(this.driver, code);
       log.info("setCode → ok");
     } catch (err) {
       log.error("setCode → error", err);
@@ -60,17 +54,15 @@ export class IframeExecutor implements BrowserExecutor {
   async getBlocksImage(): Promise<BlocksImage> {
     const end = log.time("getBlocksImage");
     try {
-      const project = await this.driver.getProject();
-      const code = project.text["main.ts"] ?? "";
-      if (code.trim().length === 0) {
-        log.warn("getBlocksImage → editor empty, throwing for LLM self-correction");
-        throw new Error(EMPTY_EDITOR_ERROR);
-      }
-      const pngBase64 = await this.driver.renderBlocksImage(code);
-      log.info("getBlocksImage → ok", { pngBytes: pngBase64.length });
-      return { pngBase64 };
+      const result = await renderCurrentBlocks(this.driver);
+      log.info("getBlocksImage → ok", { pngBytes: result.pngBase64.length });
+      return result;
     } catch (err) {
-      if ((err as Error).message !== EMPTY_EDITOR_ERROR) log.error("getBlocksImage → error", err);
+      if ((err as Error).message === EMPTY_EDITOR_ERROR) {
+        log.warn("getBlocksImage → editor empty, throwing for LLM self-correction");
+      } else {
+        log.error("getBlocksImage → error", err);
+      }
       throw err;
     } finally {
       end();

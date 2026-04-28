@@ -47,8 +47,14 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   }
 
   handleWorkspaceSave(event: WorkspaceSaveEventLike): void {
-    const files: MakeCodeProjectFiles = { text: event.project.text ?? {} };
-    this.latestHeader = event.project.header;
+    if (event.project.header !== undefined) this.latestHeader = event.project.header;
+    // MakeCode emits workspacesave events with only a header (no text) after
+    // internal triggers like importProject. Those must not drain waiters
+    // queued for an explicit saveProject() call, or the waiter resolves with
+    // {} and downstream reads see an empty main.ts.
+    const text = event.project.text;
+    if (!text) return;
+    const files: MakeCodeProjectFiles = { text };
     this.latestFiles = files;
     const callbacks = this.pendingSaveCallbacks.splice(0);
     for (const cb of callbacks) cb(files);

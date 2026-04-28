@@ -1,10 +1,9 @@
 import {
   createMakeCodeURL,
   MakeCodeFrameDriver,
-  createMakeCodeRenderBlocks,
 } from "@microbit/makecode-embed/vanilla";
+import { MakeCodeFrameDriverAdapter } from "../../browser/frame-driver-adapter.js";
 import { fillProjectDefaults } from "../../shared/project-defaults.js";
-import { svgToPngBase64 } from "../../shared/svg-to-png.js";
 
 interface ShimApi {
   importProject(text: Record<string, string>): Promise<void>;
@@ -19,23 +18,11 @@ declare global {
   }
 }
 
-let driverInit: Promise<MakeCodeFrameDriver> | null = null;
-const saveWaiters: Array<(p: { text: Record<string, string> }) => void> = [];
-let downloadWaiter: ((d: { name: string; hex: string }) => void) | null = null;
-let latestHeader: unknown = undefined;
-let renderer: ReturnType<typeof createMakeCodeRenderBlocks> | null = null;
+let adapterInit: Promise<MakeCodeFrameDriverAdapter> | null = null;
 
-function getRenderer() {
-  if (!renderer) {
-    renderer = createMakeCodeRenderBlocks({});
-    renderer.initialize();
-  }
-  return renderer;
-}
-
-function ensureDriver(): Promise<MakeCodeFrameDriver> {
-  if (driverInit) return driverInit;
-  driverInit = (async () => {
+function ensureAdapter(): Promise<MakeCodeFrameDriverAdapter> {
+  if (adapterInit) return adapterInit;
+  adapterInit = (async () => {
     const iframe = document.getElementById("mk") as HTMLIFrameElement;
     iframe.src = createMakeCodeURL(
       "https://makecode.microbit.org",
@@ -48,66 +35,40 @@ function ensureDriver(): Promise<MakeCodeFrameDriver> {
     const ready = new Promise<void>((r) => {
       resolveReady = r;
     });
+    let adapter!: MakeCodeFrameDriverAdapter;
     const driver = new MakeCodeFrameDriver(
       {
         controllerId: "mkcp-server",
         initialProjects: async () => [{ text: fillProjectDefaults({}, "") }],
-        onWorkspaceSave: (e: { project: { header?: unknown; text?: Record<string, string> } }) => {
-          latestHeader = e.project?.header ?? latestHeader;
-          // MakeCode emits workspacesave events with only a header (no text)
-          // after internal triggers like importProject. Those must not drain
-          // waiters queued for an explicit saveProject() call, or the waiter
-          // resolves with {} and downstream reads see an empty main.ts.
-          const text = e.project?.text;
-          if (!text) return;
-          const cbs = saveWaiters.splice(0);
-          for (const cb of cbs) cb({ text });
-        },
+        onWorkspaceSave: (e) => adapter.handleWorkspaceSave(e),
         onEditorContentLoaded: () => resolveReady(),
-        onDownload: (d: { name: string; hex: string }) => {
-          const cb = downloadWaiter;
-          downloadWaiter = null;
-          cb?.({ name: d.name, hex: d.hex });
-        },
+        onDownload: (d) => adapter.handleDownload(d),
       },
       () => iframe,
     );
+    adapter = new MakeCodeFrameDriverAdapter(driver);
     driver.initialize();
     await ready;
-    return driver;
+    return adapter;
   })();
-  return driverInit;
+  return adapterInit;
 }
 
 window.__mkcp = {
   async importProject(text) {
-    const driver = await ensureDriver();
-    const project = {
-      ...(latestHeader ? { header: latestHeader } : {}),
-      text,
-    } as Parameters<MakeCodeFrameDriver["importProject"]>[0]["project"];
-    await driver.importProject({ project });
+    const adapter = await ensureAdapter();
+    await adapter.setProject({ text });
   },
   async saveProject() {
-    const driver = await ensureDriver();
-    const waiter = new Promise<{ text: Record<string, string> }>((res) => {
-      saveWaiters.push(res);
-    });
-    if (saveWaiters.length === 1) await driver.saveProject();
-    return waiter;
+    const adapter = await ensureAdapter();
+    return adapter.getProject();
   },
   async compile() {
-    const driver = await ensureDriver();
-    const waiter = new Promise<{ name: string; hex: string }>((res) => {
-      downloadWaiter = res;
-    });
-    await driver.compile();
-    return waiter;
+    const adapter = await ensureAdapter();
+    return adapter.compile();
   },
   async renderBlocksImage(code) {
-    const result = await getRenderer().renderBlocks({ code });
-    const svg = result.svg ?? "";
-    if (!svg) return "";
-    return svgToPngBase64(svg);
+    const adapter = await ensureAdapter();
+    return adapter.renderBlocksImage(code);
   },
 };

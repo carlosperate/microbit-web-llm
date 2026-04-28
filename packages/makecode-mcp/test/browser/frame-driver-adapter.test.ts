@@ -149,6 +149,27 @@ describe("MakeCodeFrameDriverAdapter", () => {
     expect(driver.saveProject).not.toHaveBeenCalled();
   });
 
+  it("header-only workspaceSave does not drain pending getProject waiters", async () => {
+    // MakeCode fires header-only saves after internal triggers (e.g. importProject).
+    // A waiter on saveProject() must not resolve with {} from such an event.
+    const pending = adapter.getProject();
+    await Promise.resolve();
+    expect(driver.saveProject).toHaveBeenCalledOnce();
+
+    // Header-only save: must be ignored by the waiter.
+    adapter.handleWorkspaceSave({ project: { header: HEADER } });
+    let resolved = false;
+    pending.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    // Real save with text drains the waiter.
+    adapter.handleWorkspaceSave({ project: { header: HEADER, text: FILES } });
+    await expect(pending).resolves.toEqual({ text: FILES });
+  });
+
   it("compile rejects a second concurrent call with a clear error", async () => {
     // First compile is in flight (awaiting download event).
     const first = adapter.compile();
