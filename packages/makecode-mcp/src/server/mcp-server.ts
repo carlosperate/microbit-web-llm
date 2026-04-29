@@ -1,11 +1,7 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerExecutor } from "../shared/types.js";
 import { isSessionError } from "../shared/types.js";
-import { serverTools as TOOL_DESCRIPTORS } from "../shared/tools.js";
+import { serverToolMeta } from "../shared/tools.js";
 import { createLogger, preview } from "../shared/logger.js";
 
 const log = createLogger("mcp");
@@ -16,88 +12,30 @@ export interface McpServerOptions {
   version?: string;
 }
 
-type ToolArgs = Record<string, unknown>;
 type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 type ToolResult = { content: ContentBlock[]; isError?: boolean };
-type Dispatch = (exec: ServerExecutor, a: ToolArgs) => Promise<ToolResult>;
 
-const sid = (a: ToolArgs) => String(a.session_id ?? "");
-const code = (a: ToolArgs) => String(a.code ?? "");
+const textResult = (payload: unknown, isError = false): ToolResult => ({
+  ...(isError ? { isError: true } : {}),
+  content: [{ type: "text", text: JSON.stringify(payload) }],
+});
 
-function textResult(payload: unknown, isError = false): ToolResult {
-  return {
-    ...(isError ? { isError: true } : {}),
-    content: [{ type: "text" as const, text: JSON.stringify(payload) }],
-  };
-}
+const imageResult = (pngBase64: string): ToolResult => ({
+  content: [{ type: "image", data: pngBase64, mimeType: "image/png" }],
+});
 
-function imageResult(pngBase64: string): ToolResult {
-  return {
-    content: [{ type: "image" as const, data: pngBase64, mimeType: "image/png" }],
-  };
-}
-
-const dispatch: Record<string, Dispatch> = {
-  start_session: async (e) => textResult(await e.startSession()),
-  end_session: async (e, a) => {
-    await e.endSession(sid(a));
-    return textResult({ ok: true });
-  },
-  get_current_code: async (e, a) =>
-    textResult({ code: await e.getCurrentCode(sid(a)) }),
-  set_code: async (e, a) => {
-    await e.setCode(sid(a), code(a));
-    return textResult({ ok: true });
-  },
-  get_blocks_image: async (e, a) => {
-    const { pngBase64 } = await e.getBlocksImage(sid(a));
-    return imageResult(pngBase64);
-  },
-  get_hex_file: async (e, a) =>
-    textResult({ hex_base64: await e.getHexFile(sid(a)) }),
-  get_blocks_image_from_code: async (e, a) => {
-    const { pngBase64 } = await e.getBlocksImageFromCode(code(a));
-    return imageResult(pngBase64);
-  },
-  get_hex_file_from_code: async (e, a) =>
-    textResult({ hex_base64: await e.getHexFileFromCode(code(a)) }),
-};
-
-export function buildMcpServer(options: McpServerOptions): Server {
-  const server = new Server(
-    {
-      name: options.name ?? "makecode-mcp",
-      version: options.version ?? "0.0.0",
-    },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    log.info("ListTools");
-    return {
-      tools: TOOL_DESCRIPTORS.map((t) => ({
-        name: t.function.name,
-        description: t.function.description,
-        inputSchema: t.function.parameters,
-      })),
-    };
-  });
-
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const name = req.params.name;
-    const args = (req.params.arguments ?? {}) as ToolArgs;
-    log.info(`CallTool → ${name}`, { args: preview(args) });
+// Wraps a tool handler so SessionError surfaces as `{ isError, code }` and
+// arbitrary throws surface as `{ isError, error }`. McpServer would otherwise
+// turn a thrown error into a transport-level error, which loses our session
+// taxonomy.
+function safe(name: string, fn: () => Promise<ToolResult>) {
+  return async (): Promise<ToolResult> => {
+    log.info(`CallTool → ${name}`);
     const end = log.time(`CallTool ${name}`);
-    const handler = dispatch[name];
-    if (!handler) {
-      end();
-      log.warn(`unknown tool: ${name}`);
-      return textResult({ error: `Unknown tool: ${name}` }, true);
-    }
     try {
-      const result = await handler(options.executor, args);
+      const result = await fn();
       end();
       log.info(`CallTool ← ${name} ok`);
       return result;
@@ -106,16 +44,62 @@ export function buildMcpServer(options: McpServerOptions): Server {
       const error = err instanceof Error ? err.message : String(err);
       if (isSessionError(err)) {
         log.warn(`CallTool ← ${name} session error`, { code: err.code, error });
-      } else {
-        log.error(`CallTool ← ${name} error`, error);
+        return textResult({ error, code: err.code }, true);
       }
-      return textResult(
-        isSessionError(err) ? { error, code: err.code } : { error },
-        true,
-      );
+      log.error(`CallTool ← ${name} error`, error);
+      return textResult({ error }, true);
     }
-  });
+  };
+}
 
-  log.info("MCP server built", { tools: TOOL_DESCRIPTORS.length });
+export function buildMcpServer(options: McpServerOptions): McpServer {
+  const server = new McpServer(
+    { name: options.name ?? "makecode-mcp", version: options.version ?? "0.0.0" },
+    { capabilities: { tools: {} } },
+  );
+  const exec = options.executor;
+  const m = serverToolMeta;
+
+  const reg = <Args>(
+    name: keyof typeof serverToolMeta,
+    handler: (args: Args) => Promise<ToolResult>,
+  ) =>
+    server.registerTool(
+      name,
+      { description: m[name].description, inputSchema: m[name].inputShape },
+      ((args: Args) => {
+        log.debug(`args ${name}`, { args: preview(args) });
+        return safe(name, () => handler(args))();
+      }) as never,
+    );
+
+  reg<{}>("start_session", async () => textResult(await exec.startSession()));
+  reg<{ session_id: string }>("end_session", async ({ session_id }) => {
+    await exec.endSession(session_id);
+    return textResult({ ok: true });
+  });
+  reg<{ session_id: string }>("get_current_code", async ({ session_id }) =>
+    textResult({ code: await exec.getCurrentCode(session_id) }),
+  );
+  reg<{ session_id: string; code: string }>("set_code", async ({ session_id, code }) => {
+    await exec.setCode(session_id, code);
+    return textResult({ ok: true });
+  });
+  reg<{ session_id: string }>("get_blocks_image", async ({ session_id }) => {
+    const { pngBase64 } = await exec.getBlocksImage(session_id);
+    return imageResult(pngBase64);
+  });
+  reg<{ session_id: string }>("get_hex_file", async ({ session_id }) =>
+    textResult({ hex_base64: await exec.getHexFile(session_id) }),
+  );
+  reg<{ code: string }>("get_blocks_image_from_code", async ({ code }) => {
+    const { pngBase64 } = await exec.getBlocksImageFromCode(code);
+    return imageResult(pngBase64);
+  });
+  reg<{ code: string }>("get_hex_file_from_code", async ({ code }) =>
+    textResult({ hex_base64: await exec.getHexFileFromCode(code) }),
+  );
+
+  log.info("MCP server built", { tools: Object.keys(m).length });
   return server;
 }

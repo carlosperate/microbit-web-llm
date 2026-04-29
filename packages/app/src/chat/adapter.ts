@@ -13,6 +13,17 @@ import {
 
 const log = createLogger("adapter");
 
+function pngFromResult(result: string): string | null {
+  if (!result || !result.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(result);
+    const png = parsed?.pngBase64;
+    return typeof png === "string" && png.length > 0 ? png : null;
+  } catch {
+    return null;
+  }
+}
+
 export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
   for (const m of messages) {
@@ -160,6 +171,13 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
               result: ev.result,
               isError: ev.isError,
             });
+            // Render a blocks-image tool result inline as an image part so
+            // the user sees the rendered blocks alongside the call card.
+            // Mirrors what the MCP server emits as `image` content blocks.
+            if (!ev.isError && ev.name.startsWith("get_blocks_image")) {
+              const png = pngFromResult(ev.result);
+              if (png) parts.push({ type: "image", image: `data:image/png;base64,${png}` });
+            }
             yield flush();
           }
         }

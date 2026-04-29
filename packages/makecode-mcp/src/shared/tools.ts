@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export interface ToolParameterSchema {
   type: "object";
   properties: Record<string, { type: string; description?: string }>;
@@ -13,14 +15,6 @@ export interface ToolDescriptor {
     parameters: ToolParameterSchema;
   };
 }
-
-const SESSION_ID_PROP = {
-  session_id: {
-    type: "string",
-    description:
-      "Opaque session identifier returned by start_session. Required on every stateful call.",
-  },
-};
 
 const CODE_PROP = {
   code: {
@@ -118,120 +112,86 @@ export const browserToolNames = browserTools.map((t) => t.function.name);
 
 // ─── Server target ──────────────────────────────────────────────────────────
 // A single MCP server can multiplex many LLM clients, so sessions are
-// first-class. Each session_id maps to an isolated puppeteer tab.
+// first-class. We define each tool as a Zod input shape + description, then
+// derive the JSON Schema descriptors from the same shapes (single source of
+// truth) and feed the raw shapes straight into McpServer.registerTool.
 
-export const serverTools: ToolDescriptor[] = [
-  {
-    type: "function",
-    function: {
-      name: "start_session",
-      description:
-        "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_image, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      },
-    },
+const sessionIdField = z
+  .string()
+  .describe(
+    "Opaque session identifier returned by start_session. Required on every stateful call.",
+  );
+
+const codeField = z.string().describe("MakeCode TypeScript source.");
+
+export interface ServerToolMeta<Shape extends z.ZodRawShape = z.ZodRawShape> {
+  description: string;
+  inputShape: Shape;
+}
+
+export const serverToolMeta = {
+  start_session: {
+    description:
+      "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_image, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
+    inputShape: {},
   },
-  {
-    type: "function",
-    function: {
-      name: "end_session",
-      description:
-        "Close the MakeCode session identified by session_id and release its resources.",
-      parameters: {
-        type: "object",
-        properties: { ...SESSION_ID_PROP },
-        required: ["session_id"],
-        additionalProperties: false,
-      },
-    },
+  end_session: {
+    description:
+      "Close the MakeCode session identified by session_id and release its resources.",
+    inputShape: { session_id: sessionIdField },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_current_code",
-      description: `Return the TypeScript source currently loaded in the editor for this session. ${noSessionHint}`,
-      parameters: {
-        type: "object",
-        properties: { ...SESSION_ID_PROP },
-        required: ["session_id"],
-        additionalProperties: false,
-      },
-    },
+  get_current_code: {
+    description: `Return the TypeScript source currently loaded in the editor for this session. ${noSessionHint}`,
+    inputShape: { session_id: sessionIdField },
   },
-  {
-    type: "function",
-    function: {
-      name: "set_code",
-      description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image. ${noSessionHint}`,
-      parameters: {
-        type: "object",
-        properties: {
-          ...SESSION_ID_PROP,
-          ...CODE_PROP,
-        },
-        required: ["session_id", "code"],
-        additionalProperties: false,
-      },
-    },
+  set_code: {
+    description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image. ${noSessionHint}`,
+    inputShape: { session_id: sessionIdField, code: codeField },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_blocks_image",
-      description: `Render the currently-loaded code as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedServerHint} ${noSessionHint}`,
-      parameters: {
-        type: "object",
-        properties: { ...SESSION_ID_PROP },
-        required: ["session_id"],
-        additionalProperties: false,
-      },
-    },
+  get_blocks_image: {
+    description: `Render the currently-loaded code as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedServerHint} ${noSessionHint}`,
+    inputShape: { session_id: sessionIdField },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_hex_file",
-      description: `Compile the currently-loaded code and return the micro:bit .hex as a base64 string. ${loadedServerHint} ${noSessionHint}`,
-      parameters: {
-        type: "object",
-        properties: { ...SESSION_ID_PROP },
-        required: ["session_id"],
-        additionalProperties: false,
-      },
-    },
+  get_hex_file: {
+    description: `Compile the currently-loaded code and return the micro:bit .hex as a base64 string. ${loadedServerHint} ${noSessionHint}`,
+    inputShape: { session_id: sessionIdField },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_blocks_image_from_code",
-      description:
-        "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks. Stateless — does not touch any session.",
-      parameters: {
-        type: "object",
-        properties: { ...CODE_PROP },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
+  get_blocks_image_from_code: {
+    description:
+      "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks. Stateless — does not touch any session.",
+    inputShape: { code: codeField },
   },
-  {
-    type: "function",
-    function: {
-      name: "get_hex_file_from_code",
-      description:
-        "Compile the given TypeScript and return the micro:bit .hex as a base64 string. Stateless — does not touch any session. Server target only; on the browser target use set_code + get_hex_file within a session.",
-      parameters: {
-        type: "object",
-        properties: { ...CODE_PROP },
-        required: ["code"],
-        additionalProperties: false,
-      },
-    },
+  get_hex_file_from_code: {
+    description:
+      "Compile the given TypeScript and return the micro:bit .hex as a base64 string. Stateless — does not touch any session. Server target only; on the browser target use set_code + get_hex_file within a session.",
+    inputShape: { code: codeField },
   },
-];
+} as const satisfies Record<string, ServerToolMeta>;
+
+export type ServerToolName = keyof typeof serverToolMeta;
+
+function shapeToParameters(shape: z.ZodRawShape): ToolParameterSchema {
+  const json = z.toJSONSchema(z.strictObject(shape)) as {
+    properties?: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
+  return {
+    type: "object",
+    properties: json.properties ?? {},
+    required: json.required ?? [],
+    additionalProperties: false,
+  };
+}
+
+export const serverTools: ToolDescriptor[] = (
+  Object.keys(serverToolMeta) as ServerToolName[]
+).map((name) => ({
+  type: "function",
+  function: {
+    name,
+    description: serverToolMeta[name].description,
+    parameters: shapeToParameters(serverToolMeta[name].inputShape),
+  },
+}));
 
 export const serverToolNames = serverTools.map((t) => t.function.name);

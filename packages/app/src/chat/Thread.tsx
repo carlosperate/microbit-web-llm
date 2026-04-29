@@ -57,12 +57,21 @@ function AssistantMessage() {
         <MessagePrimitive.Parts
           components={{
             Text: TextPart,
+            Image: ImagePart,
             tools: { Fallback: ToolCallView },
           }}
         />
         <AssistantError />
       </div>
     </MessagePrimitive.Root>
+  );
+}
+
+function ImagePart({ image }: { image: string }) {
+  return (
+    <div className="tool-call-image">
+      <img src={image} alt="MakeCode blocks" />
+    </div>
   );
 }
 
@@ -87,7 +96,9 @@ function ToolCallView({
   isError?: boolean;
 }) {
   const resultText = result === undefined ? null : typeof result === "string" ? result : JSON.stringify(result);
-  const pngBase64 = !isError ? extractPngBase64(resultText) : null;
+  // Blocks images render as a sibling image part (pushed by the adapter);
+  // hide the raw JSON result here to avoid showing the same data twice.
+  const isImageTool = !isError && toolName.startsWith("get_blocks_image");
   return (
     <details className={`tool-call ${isError ? "tool-call-error" : ""}`}>
       <summary>
@@ -98,37 +109,15 @@ function ToolCallView({
         <div className="tool-call-args">
           <strong>args:</strong> <code>{argsText || "{}"}</code>
         </div>
-        {resultText !== null && (
+        {resultText !== null && !isImageTool && (
           <div className="tool-call-result">
             <strong>result:</strong>
-            {pngBase64 ? (
-              <div className="tool-call-image">
-                <img
-                  src={`data:image/png;base64,${pngBase64}`}
-                  alt="MakeCode blocks"
-                />
-              </div>
-            ) : (
-              <pre>{truncate(resultText, 2000)}</pre>
-            )}
+            <pre>{truncate(resultText, 2000)}</pre>
           </div>
         )}
       </div>
     </details>
   );
-}
-
-function extractPngBase64(resultText: string | null): string | null {
-  if (!resultText) return null;
-  const trimmed = resultText.trim();
-  if (!trimmed.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    const png = parsed?.pngBase64;
-    return typeof png === "string" && png.length > 0 ? png : null;
-  } catch {
-    return null;
-  }
 }
 
 function truncate(s: string, n: number) {

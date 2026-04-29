@@ -69,6 +69,24 @@ interface PendingToolCall {
   arguments: string;
 }
 
+// The constrained-decoding path in webllm-engine emits every tool call in a
+// single synthetic delta with full id + arguments — no per-call streaming —
+// so we just collect deltas as-is. If a future model uses native streamed
+// tool-call deltas (partial arguments per chunk, keyed by index), this needs
+// to grow back into an index-keyed accumulator.
+function collectToolCalls(
+  out: PendingToolCall[],
+  deltas: NonNullable<StreamChunk["choices"][0]["delta"]["tool_calls"]>,
+): void {
+  for (const d of deltas) {
+    out.push({
+      id: d.id ?? "",
+      name: d.function?.name ?? "",
+      arguments: d.function?.arguments ?? "",
+    });
+  }
+}
+
 // Stateful tools (acting on the editor) that count as actually advancing the
 // user's request. Used by the stall-retry heuristic: if the model emits []
 // before any of these have fired, we nudge it once instead of falling back to
@@ -87,20 +105,6 @@ const SUBSTANTIVE_TOOLS = new Set([
 // actually calling them.
 const STALL_REMINDER =
   "[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: set_code with the program, then get_blocks_image to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.";
-
-function accumulateToolCalls(
-  acc: Map<number, PendingToolCall>,
-  deltas: NonNullable<StreamChunk["choices"][0]["delta"]["tool_calls"]>,
-): void {
-  for (const d of deltas) {
-    const prev = acc.get(d.index) ?? { id: "", name: "", arguments: "" };
-    acc.set(d.index, {
-      id: d.id ?? prev.id,
-      name: d.function?.name ?? prev.name,
-      arguments: prev.arguments + (d.function?.arguments ?? ""),
-    });
-  }
-}
 
 async function dispatchTool(
   executor: BrowserExecutor,
@@ -161,7 +165,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
       });
       const endStep = log.time(`step ${step + 1} stream`);
       const stream = await completion({ messages: history, tools, signal, options: completionOptions });
-      const pending = new Map<number, PendingToolCall>();
+      const pending: PendingToolCall[] = [];
       let assistantText = "";
       let finish: StreamChunk["choices"][0]["finish_reason"] = null;
 
@@ -174,17 +178,17 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
           assistantText += delta.content;
           yield { type: "text-delta", delta: delta.content };
         }
-        if (delta.tool_calls) accumulateToolCalls(pending, delta.tool_calls);
+        if (delta.tool_calls) collectToolCalls(pending, delta.tool_calls);
         if (choice.finish_reason) finish = choice.finish_reason;
       }
       endStep();
       log.info(`step ${step + 1}: stream complete`, {
         finish,
-        pendingCalls: pending.size,
+        pendingCalls: pending.length,
         textChars: assistantText.length,
       });
 
-      if (finish === "tool_calls" && pending.size === 0) {
+      if (finish === "tool_calls" && pending.length === 0) {
         // Schema-constrained `[]` output. Two sub-cases:
         // 1. Stall before substantive work — one-time recovery: append a
         //    system reminder and retry with tools still enabled.
@@ -214,10 +218,8 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         return;
       }
 
-      if (finish === "tool_calls" || pending.size > 0) {
-        const calls = [...pending.entries()]
-          .sort(([a], [b]) => a - b)
-          .map(([, c]) => c);
+      if (finish === "tool_calls" || pending.length > 0) {
+        const calls = pending;
         log.info(
           `dispatching ${calls.length} tool call(s) in parallel: ${calls.map((c) => c.name).join(", ")}`,
         );
