@@ -78,6 +78,11 @@ async function* parseToolCallStream(
     if (choice.delta?.content) buffer += choice.delta.content;
     if (choice.finish_reason) finish = choice.finish_reason;
   }
+  // Raw, unaltered model output (pre-parse, pre-filter) for debugging tool-call
+  // failures. Printed verbatim so newlines/whitespace/markdown are visible.
+  console.log(
+    `[webllm] raw model output (${buffer.length} chars, finish=${finish}):\n${buffer}`,
+  );
   let parsed: Array<{ name: string; arguments: unknown }> = [];
   if (buffer.trim().length > 0) {
     try {

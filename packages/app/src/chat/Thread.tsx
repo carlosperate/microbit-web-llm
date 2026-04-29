@@ -63,7 +63,7 @@ function UserMessage() {
 function AssistantMessage() {
   const msg = useMessage();
   const hasContent = msg.content.length > 0;
-  const isRunning = msg.status.type === "running";
+  const isRunning = msg.status?.type === "running";
   // While the model is generating but hasn't produced any part yet, render
   // the thinking dots in place of the (otherwise empty) content. As soon as
   // the first text-delta or tool-call arrives, the dots are replaced by the

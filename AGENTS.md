@@ -59,6 +59,13 @@ No code loaded in the editor. Call set_code first to load code before requesting
 
 Do not throw a generic error. The message is part of the LLM interaction loop.
 
+### `set_code` merges workspacesave events and surfaces decompile failures
+
+`MakeCodeFrameDriverAdapter.setProject` does two things beyond calling `importProject`, both motivated by failure modes that hit the LLM tool loop hard:
+
+1. **Merge workspacesave events into the cache instead of replacing.** MakeCode fires `workspacesave` events with partial `text` (e.g. only `main.blocks` after a view switch following `importProject`). Replacing `latestFiles.text` wholesale would drop the `main.ts` we just imported and make the next `getBlocksImage` throw `EMPTY_EDITOR_ERROR`. Combined with sequential tool dispatch in the chat tool loop (so a fast read can't outrun a slow `setCode`), the optimistic cache update at the top of `setProject` plus this merge is enough — there's no echo-wait state machine.
+2. **Propagate `switchBlocks` rejection.** Importing with an empty `main.blocks` lands the editor in JS view; `switchBlocks` then forces decompile-to-blocks. If the TS is invalid, MakeCode shows its own error popup *and* `switchBlocks` rejects. The adapter rethrows that rejection from `setProject` with a message the model can act on (`"Code was loaded into the editor but failed to compile to blocks: <reason>. Fix the TypeScript and call set_code again."`). The tool loop surfaces this as `isError: true` so the model self-corrects rather than calling `get_blocks_image` on uncompilable code.
+
 ### Tests are written first
 
 Every new piece of production code lands with a failing test authored *before* the implementation. Red → green → refactor. Writing tests after the fact overfits them to whatever the code happens to do, masking wrong behaviour. Unit tests (Vitest) live under `packages/*/test/`; integration/e2e tests (Playwright) live under the same `test/` tree but run only via `npm run test:e2e`. Spike scripts are exempt — their self-assertions are their tests.
@@ -189,7 +196,7 @@ If WebGPU is not available, show a clear error message. Do not silently fall bac
 The LLM may return `finish_reason: "tool_calls"` multiple times before producing a final text response. The loop must handle this correctly:
 
 1. Send message to WebLLM with tools array
-2. If response has `finish_reason: "tool_calls"`, execute all tool calls in parallel
+2. If response has `finish_reason: "tool_calls"`, execute all tool calls **sequentially in emission order** (not in parallel — see note below)
 3. Append the assistant tool-call message and all tool result messages to history
 4. Re-send to WebLLM
 5. Repeat until `finish_reason: "stop"`
@@ -202,6 +209,8 @@ The loop also handles Qwen-specific quirks:
 - **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`set_code`, `get_current_code`, `get_blocks_image`, `get_hex_file`, or the `_from_code` variants). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
 
 Because the browser target has no sessions, the loop is stateless: no `session_id` injection, no next-step hint enrichment, no ordering of a setup call before siblings. If you add a new tool, just add a case to the `dispatchTool` switch.
+
+Tool calls within a single batch are dispatched **sequentially** in the order the model emitted them. The smaller models in the picker frequently batch `get_current_code` + `set_code` + `get_blocks_image` in one turn intending strict ordering; running them in parallel races — a 17ms `get_blocks_image` returns before the ~2s `set_code` ingest commits, so blocks render against the pre-set state and throw `EMPTY_EDITOR_ERROR`. Inference cost dwarfs executor latency, so serialisation is essentially free. Do not reintroduce `Promise.all` here.
 
 ### System prompt
 

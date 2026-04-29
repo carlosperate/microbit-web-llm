@@ -77,9 +77,9 @@ describe("convertMessages", () => {
     expect(out[1]).toEqual({ role: "tool", tool_call_id: "c1", content: '{"ok":true}' });
   });
 
-  it("omits tool_calls when there are none and keeps content null if empty", () => {
+  it("omits tool_calls when there are none and uses empty string content (WebLLM requires string)", () => {
     const out = convertMessages([assistantMsg([])]);
-    expect(out[0]).toEqual({ role: "assistant", content: null });
+    expect(out[0]).toEqual({ role: "assistant", content: "" });
   });
 });
 

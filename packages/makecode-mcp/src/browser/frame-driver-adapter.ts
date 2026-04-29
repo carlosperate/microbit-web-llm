@@ -54,7 +54,17 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     // {} and downstream reads see an empty main.ts.
     const text = event.project.text;
     if (!text) return;
-    const files: MakeCodeProjectFiles = { text };
+    // Merge incoming text fields into the cache rather than replacing it.
+    // MakeCode fires workspacesave events with partial text (e.g. only
+    // main.blocks after a view switch following importProject). Replacing
+    // wholesale would drop the main.ts we just imported and make the next
+    // get_blocks_image throw EMPTY_EDITOR_ERROR even though the editor still
+    // shows the code.
+    const merged: Record<string, string> = {
+      ...(this.latestFiles?.text ?? {}),
+      ...text,
+    };
+    const files: MakeCodeProjectFiles = { text: merged };
     this.latestFiles = files;
     const callbacks = this.pendingSaveCallbacks.splice(0);
     for (const cb of callbacks) cb(files);
@@ -89,11 +99,17 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     });
     // Importing with an empty main.blocks lands the editor in JS view. Force
     // blocks view so MakeCode decompiles main.ts into blocks for display.
+    // If the decompile fails (invalid TS), MakeCode shows its own error popup
+    // and rejects switchBlocks. Surface that rejection as a setProject error
+    // so the LLM sees a tool error and self-corrects rather than blindly
+    // calling get_blocks_image on uncompilable code.
     try {
       await this.driver.switchBlocks();
-    } catch {
-      // switchBlocks can reject if decompile fails (invalid TS). Leave the
-      // editor in whatever view importProject chose rather than propagating.
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Code was loaded into the editor but failed to compile to blocks: ${reason}. Fix the TypeScript and call set_code again.`,
+      );
     }
   }
 

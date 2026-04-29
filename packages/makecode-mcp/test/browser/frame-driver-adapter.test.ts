@@ -25,6 +25,7 @@ function makeDriverStub() {
     saveProject: vi.fn(async () => {}),
     importProject: vi.fn(async () => {}),
     compile: vi.fn(async () => {}),
+    switchBlocks: vi.fn(async () => {}),
   };
 }
 
@@ -168,6 +169,31 @@ describe("MakeCodeFrameDriverAdapter", () => {
     // Real save with text drains the waiter.
     adapter.handleWorkspaceSave({ project: { header: HEADER, text: FILES } });
     await expect(pending).resolves.toEqual({ text: FILES });
+  });
+
+  it("setProject throws when switchBlocks rejects so the LLM can self-correct", async () => {
+    driver.switchBlocks.mockRejectedValueOnce(new Error("decompile failed: unsupported syntax"));
+    await expect(
+      adapter.setProject({ text: { ...FILES, "main.ts": "this is not valid TS" } }),
+    ).rejects.toThrow(/loaded.*compile to blocks.*decompile failed: unsupported syntax/i);
+    // The import itself succeeded — the optimistic cache reflects the new code
+    // so a follow-up set_code from the model can replace it.
+    expect(driver.importProject).toHaveBeenCalledOnce();
+  });
+
+  it("workspacesave events merge into the cache instead of replacing", async () => {
+    // After setProject, MakeCode may fire follow-up workspacesave events
+    // carrying only the fields it just changed (e.g. main.blocks after a
+    // view switch). Replacing the cache wholesale would drop the main.ts we
+    // just imported and make the very next get_blocks_image throw
+    // EMPTY_EDITOR_ERROR even though the editor still has the code.
+    await adapter.setProject({ text: { ...FILES, "main.ts": "basic.showNumber(7)" } });
+    adapter.handleWorkspaceSave({
+      project: { header: HEADER, text: { "main.blocks": "<xml>new</xml>" } },
+    });
+    const project = await adapter.getProject();
+    expect(project.text["main.ts"]).toBe("basic.showNumber(7)");
+    expect(project.text["main.blocks"]).toBe("<xml>new</xml>");
   });
 
   it("compile rejects a second concurrent call with a clear error", async () => {

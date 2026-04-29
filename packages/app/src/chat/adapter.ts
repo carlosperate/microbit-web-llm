@@ -63,9 +63,13 @@ export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessa
         }
       }
     }
+    // WebLLM's `ContentTypeError` requires assistant `content` to be a string,
+    // even when `tool_calls` is present. Use "" rather than null for tool-only
+    // turns so subsequent inferences don't fail with
+    // "assistant's message should have string content."
     out.push({
       role: "assistant",
-      content: assistantText || null,
+      content: assistantText,
       ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
     });
     for (const r of toolResults) {

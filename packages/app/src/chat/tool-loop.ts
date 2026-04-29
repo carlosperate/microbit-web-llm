@@ -221,11 +221,11 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
       if (finish === "tool_calls" || pending.length > 0) {
         const calls = pending;
         log.info(
-          `dispatching ${calls.length} tool call(s) in parallel: ${calls.map((c) => c.name).join(", ")}`,
+          `dispatching ${calls.length} tool call(s) sequentially: ${calls.map((c) => c.name).join(", ")}`,
         );
         history.push({
           role: "assistant",
-          content: assistantText || null,
+          content: assistantText,
           tool_calls: calls.map((c) => ({
             id: c.id,
             type: "function" as const,
@@ -235,24 +235,28 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
 
         type DispatchResult = { call: PendingToolCall; args: Record<string, unknown>; result: string; isError: boolean };
 
-        const results: DispatchResult[] = await Promise.all(
-          calls.map(async (c) => {
-            const args = parseArgs(c.arguments);
-            log.info(`  → ${c.name}(${preview(args)})`);
-            const endCall = log.time(`  ← ${c.name}`);
-            try {
-              const result = await dispatchTool(executor, c.name, args);
-              endCall();
-              log.info(`  ← ${c.name} ok`, { resultBytes: result.length, preview: preview(result) });
-              return { call: c, args, result, isError: false };
-            } catch (err) {
-              endCall();
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`  ← ${c.name} error: ${msg}`);
-              return { call: c, args, result: msg, isError: true };
-            }
-          }),
-        );
+        // Run sequentially in the order the model emitted them. The model
+        // frequently batches set_code + get_blocks_image (sometimes preceded
+        // by get_current_code) in one turn, intending strict ordering. Running
+        // them in parallel races: a fast read finishes before the slow
+        // setCode commits and the editor still looks empty.
+        const results: DispatchResult[] = [];
+        for (const c of calls) {
+          const args = parseArgs(c.arguments);
+          log.info(`  → ${c.name}(${preview(args)})`);
+          const endCall = log.time(`  ← ${c.name}`);
+          try {
+            const result = await dispatchTool(executor, c.name, args);
+            endCall();
+            log.info(`  ← ${c.name} ok`, { resultBytes: result.length, preview: preview(result) });
+            results.push({ call: c, args, result, isError: false });
+          } catch (err) {
+            endCall();
+            const msg = err instanceof Error ? err.message : String(err);
+            log.warn(`  ← ${c.name} error: ${msg}`);
+            results.push({ call: c, args, result: msg, isError: true });
+          }
+        }
 
         for (const r of results) {
           history.push({

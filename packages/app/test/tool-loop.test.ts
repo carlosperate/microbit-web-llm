@@ -91,8 +91,25 @@ describe("runToolLoop", () => {
     expect(events.filter((e) => e.type === "text-delta").map((e) => e.delta).join("")).toBe("done");
   });
 
-  it("executes parallel tool calls in the same turn", async () => {
-    const executor = makeExecutor();
+  it("executes multiple tool calls in the same turn sequentially in emission order", async () => {
+    // The model frequently emits set_code + get_blocks_image (and sometimes
+    // get_current_code beforehand) in a single batch. Running them in
+    // parallel races: get_blocks_image returns in ~17ms while set_code is
+    // still in flight (~2s for MakeCode to ingest), so blocks render against
+    // the pre-set state and throw EMPTY_EDITOR_ERROR. Serialising preserves
+    // the model's intended ordering.
+    let setCodeResolved = false;
+    let getBlocksStartedBeforeSetCode = false;
+    const executor = makeExecutor({
+      setCode: vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        setCodeResolved = true;
+      }),
+      getBlocksImage: vi.fn(async () => {
+        if (!setCodeResolved) getBlocksStartedBeforeSetCode = true;
+        return { pngBase64: "iVBORw0KGgo=" };
+      }),
+    });
     let turn = 0;
     const engine: ChatCompletionFn = async () => {
       turn++;
@@ -101,7 +118,8 @@ describe("runToolLoop", () => {
           chunk({
             tool_calls: [
               { index: 0, id: "a", function: { name: "get_current_code", arguments: "{}" } },
-              { index: 1, id: "b", function: { name: "get_blocks_image", arguments: "{}" } },
+              { index: 1, id: "b", function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' } },
+              { index: 2, id: "c", function: { name: "get_blocks_image", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -119,7 +137,9 @@ describe("runToolLoop", () => {
       // drain
     }
     expect(executor.getCurrentCode).toHaveBeenCalledOnce();
+    expect(executor.setCode).toHaveBeenCalledOnce();
     expect(executor.getBlocksImage).toHaveBeenCalledOnce();
+    expect(getBlocksStartedBeforeSetCode).toBe(false);
   });
 
   it("passes get_blocks_image_from_code through as a stateless render", async () => {
