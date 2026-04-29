@@ -36,6 +36,16 @@ function EmptyState() {
   );
 }
 
+function ThinkingIndicator() {
+  return (
+    <div className="thinking-indicator" aria-live="polite" aria-label="Assistant is thinking">
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+      <span className="thinking-dot" />
+    </div>
+  );
+}
+
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="message message-user">
@@ -51,6 +61,20 @@ function UserMessage() {
 }
 
 function AssistantMessage() {
+  const msg = useMessage();
+  const hasContent = msg.content.length > 0;
+  const isRunning = msg.status.type === "running";
+  // While the model is generating but hasn't produced any part yet, render
+  // the thinking dots in place of the (otherwise empty) content. As soon as
+  // the first text-delta or tool-call arrives, the dots are replaced by the
+  // real content within the same bubble — no flash of an empty message.
+  if (!hasContent && isRunning) {
+    return (
+      <MessagePrimitive.Root className="message message-assistant">
+        <ThinkingIndicator />
+      </MessagePrimitive.Root>
+    );
+  }
   return (
     <MessagePrimitive.Root className="message message-assistant">
       <div className="message-content">
