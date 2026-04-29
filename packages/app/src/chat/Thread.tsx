@@ -25,7 +25,11 @@ export function Thread() {
   );
 }
 
-const TextPart = () => <MessagePartPrimitive.Text />;
+const TextPart = () => (
+  <div className="text-part">
+    <MessagePartPrimitive.Text />
+  </div>
+);
 
 function EmptyState() {
   return (
@@ -49,13 +53,7 @@ function ThinkingIndicator() {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="message message-user">
-      <div className="message-content">
-        <MessagePrimitive.Parts
-          components={{
-            Text: TextPart,
-          }}
-        />
-      </div>
+      <MessagePrimitive.Parts components={{ Text: TextPart }} />
     </MessagePrimitive.Root>
   );
 }
@@ -64,10 +62,6 @@ function AssistantMessage() {
   const msg = useMessage();
   const hasContent = msg.content.length > 0;
   const isRunning = msg.status?.type === "running";
-  // While the model is generating but hasn't produced any part yet, render
-  // the thinking dots in place of the (otherwise empty) content. As soon as
-  // the first text-delta or tool-call arrives, the dots are replaced by the
-  // real content within the same bubble — no flash of an empty message.
   if (!hasContent && isRunning) {
     return (
       <MessagePrimitive.Root className="message message-assistant">
@@ -77,7 +71,7 @@ function AssistantMessage() {
   }
   return (
     <MessagePrimitive.Root className="message message-assistant">
-      <div className="message-content">
+      <div className="message-content message-content-parts">
         <MessagePrimitive.Parts
           components={{
             Text: TextPart,
@@ -93,7 +87,7 @@ function AssistantMessage() {
 
 function ImagePart({ image }: { image: string }) {
   return (
-    <div className="tool-call-image">
+    <div className="image-part">
       <img src={image} alt="MakeCode blocks" />
     </div>
   );
@@ -120,22 +114,30 @@ function ToolCallView({
   isError?: boolean;
 }) {
   const resultText = result === undefined ? null : typeof result === "string" ? result : JSON.stringify(result);
-  // Blocks images render as a sibling image part (pushed by the adapter);
-  // hide the raw JSON result here to avoid showing the same data twice.
   const isImageTool = !isError && toolName.startsWith("get_blocks_image");
+  const isPending = result === undefined && !isError;
+
   return (
-    <details className={`tool-call ${isError ? "tool-call-error" : ""}`}>
+    <details className={`tool-call${isError ? " tool-call-error" : ""}`}>
       <summary>
-        <code>{toolName}</code>
-        {isError && <span className="tool-call-badge">error</span>}
+        {isPending ? (
+          <span className="tool-call-status-pend">…</span>
+        ) : isError ? (
+          <span className="tool-call-status-err">✗</span>
+        ) : (
+          <span className="tool-call-status-ok">✓</span>
+        )}
+        <code className="tool-call-name">{toolName}</code>
+        <span className="tool-call-chevron">▼</span>
       </summary>
       <div className="tool-call-body">
+        <div className="tool-call-body-name">{toolName}()</div>
         <div className="tool-call-args">
-          <strong>args:</strong> <code>{argsText || "{}"}</code>
+          args: <span>{argsText || "{}"}</span>
         </div>
         {resultText !== null && !isImageTool && (
           <div className="tool-call-result">
-            <strong>result:</strong>
+            result:
             <pre>{truncate(resultText, 2000)}</pre>
           </div>
         )}
@@ -151,18 +153,20 @@ function truncate(s: string, n: number) {
 function Composer() {
   return (
     <ComposerPrimitive.Root className="composer">
-      <ComposerPrimitive.Input
-        rows={2}
-        autoFocus
-        placeholder="Ask for a micro:bit program…"
-        className="composer-input"
-      />
-      <ThreadPrimitive.If running={false}>
-        <ComposerPrimitive.Send className="composer-send">Send</ComposerPrimitive.Send>
-      </ThreadPrimitive.If>
-      <ThreadPrimitive.If running>
-        <ComposerPrimitive.Cancel className="composer-cancel">Stop</ComposerPrimitive.Cancel>
-      </ThreadPrimitive.If>
+      <div className="composer-inner">
+        <ComposerPrimitive.Input
+          rows={1}
+          autoFocus
+          placeholder="Ask for a micro:bit program…"
+          className="composer-input"
+        />
+        <ThreadPrimitive.If running={false}>
+          <ComposerPrimitive.Send className="composer-send">↑</ComposerPrimitive.Send>
+        </ThreadPrimitive.If>
+        <ThreadPrimitive.If running>
+          <ComposerPrimitive.Cancel className="composer-cancel">■</ComposerPrimitive.Cancel>
+        </ThreadPrimitive.If>
+      </div>
     </ComposerPrimitive.Root>
   );
 }

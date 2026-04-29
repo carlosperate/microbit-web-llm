@@ -4,7 +4,9 @@ import {
   MAX_STEPS_RANGE,
   MAX_TOKENS_RANGE,
   TEMPERATURE_RANGE,
+  type AccentColor,
   type ChatSettings,
+  type ChatVariant,
 } from "./chat/settings.js";
 
 export interface SettingsPanelProps {
@@ -14,6 +16,18 @@ export interface SettingsPanelProps {
   onResetChat: () => void;
   onResetEditor: () => void;
 }
+
+const ACCENT_OPTIONS: { value: AccentColor; label: string; color: string }[] = [
+  { value: "cyan",    label: "Cyan",    color: "#00C8E8" },
+  { value: "teal",    label: "Teal",    color: "#00B4A0" },
+  { value: "magenta", label: "Magenta", color: "#D4127A" },
+];
+
+const VARIANT_OPTIONS: { value: ChatVariant; label: string }[] = [
+  { value: "clean",  label: "Clean"  },
+  { value: "tinted", label: "Tinted" },
+  { value: "bold",   label: "Bold"   },
+];
 
 export function SettingsPanel({
   settings,
@@ -53,6 +67,42 @@ export function SettingsPanel({
         </button>
       </div>
       <div className="settings-body">
+
+        <section className="settings-section">
+          <h3>Appearance</h3>
+          <div className="settings-field">
+            <span style={{ fontSize: "0.85rem" }}>Accent colour</span>
+            <div className="settings-swatches">
+              {ACCENT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`settings-swatch${draft.accentColor === opt.value ? " active" : ""}`}
+                  style={draft.accentColor === opt.value ? { background: opt.color, borderColor: opt.color } : {}}
+                  onClick={() => update("accentColor", opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-field">
+            <span style={{ fontSize: "0.85rem" }}>Panel style</span>
+            <div className="settings-swatches">
+              {VARIANT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`settings-swatch${draft.chatVariant === opt.value ? " active" : ""}`}
+                  onClick={() => update("chatVariant", opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section className="settings-section">
           <h3>Sampling</h3>
           <label className="settings-field">
@@ -143,7 +193,7 @@ export function SettingsPanel({
 
         <section className="settings-section">
           <h3>Diagnostics</h3>
-          <label className="settings-field-row settings-field-inline">
+          <label className="settings-field-inline">
             <span>Verbose console logging</span>
             <input
               type="checkbox"
@@ -171,6 +221,7 @@ export function SettingsPanel({
             Reset chat clears the conversation but keeps the editor and model. Reset editor clears any loaded code.
           </p>
         </section>
+
       </div>
     </div>
   );

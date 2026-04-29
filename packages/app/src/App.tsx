@@ -7,12 +7,38 @@ import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
 import { loadWebLLM, isWebGPUSupported, MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
-import { DEFAULT_SETTINGS, type ChatSettings } from "./chat/settings.js";
+import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor, type ChatVariant } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 
 const log = createLogger("app");
 
 type ChatAdapter = ReturnType<typeof createChatAdapter>;
+
+const ACCENT_TOKENS: Record<AccentColor, { accent: string; dark: string; light: string; border: string }> = {
+  cyan:    { accent: "#00C8E8", dark: "#0088a8", light: "#e0f8ff", border: "#b0eaf8" },
+  teal:    { accent: "#00B4A0", dark: "#007a6e", light: "#e0f5f3", border: "#a8e0da" },
+  magenta: { accent: "#D4127A", dark: "#a00060", light: "#fce8f3", border: "#f0b0d8" },
+};
+
+const VARIANT_TOKENS: Record<ChatVariant, { panelBg: string; msgAreaBg: string }> = {
+  clean:  { panelBg: "#ffffff", msgAreaBg: "#f7f9fb" },
+  tinted: { panelBg: "#f5f8fa", msgAreaBg: "#edf1f5" },
+  bold:   { panelBg: "#ffffff", msgAreaBg: "#f3f5f8" },
+};
+
+function buildCssVars(settings: ChatSettings): React.CSSProperties {
+  const a = ACCENT_TOKENS[settings.accentColor] ?? ACCENT_TOKENS.cyan;
+  const v = VARIANT_TOKENS[settings.chatVariant] ?? VARIANT_TOKENS.clean;
+  return {
+    "--accent": a.accent,
+    "--accent-dark": a.dark,
+    "--accent-light": a.light,
+    "--accent-border": a.border,
+    "--panel-bg": v.panelBg,
+    "--msg-area-bg": v.msgAreaBg,
+    "--divider": a.border,
+  } as React.CSSProperties;
+}
 
 /** Hosts its own runtime so remounting this component (via `key`) gives a
  *  fresh, empty thread — used to reset the conversation when the model
@@ -39,21 +65,28 @@ export function App(props: {
   );
   const [selectedModelId, setSelectedModelId] = useState<ModelId>(MODEL_ID);
   const [loadedModelId, setLoadedModelId] = useState<ModelId | null>(props.mockCompletion ? MODEL_ID : null);
-  // Incremented whenever a new model finishes loading OR the user resets the
-  // chat, so the chat subtree remounts with a fresh runtime. Kept separate
-  // from loadedModelId so re-loading the same model id still counts as a new
-  // conversation.
   const [chatEpoch, setChatEpoch] = useState(0);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef<ChatSettings>(settings);
   settingsRef.current = settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
   const completionRef = useRef<ChatCompletionFn | null>(props.mockCompletion ?? null);
   const executorRef = useRef<BrowserExecutor | null>(null);
-  // Not shown to users — exposed as a data attribute on the chat pane so
-  // tests can wait for the iframe executor to hand over without the UI
-  // having to display a noisy "editor ready" badge.
   const [executorReady, setExecutorReady] = useState(false);
+
+  // Close model dropdown on outside click
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
+        setModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [modelDropdownOpen]);
 
   const loadModel = useCallback(async (modelId: ModelId) => {
     if (props.mockCompletion) return;
@@ -111,8 +144,6 @@ export function App(props: {
   }, []);
 
   useEffect(() => {
-    // Print a one-time banner so a user opening devtools sees where logs
-    // come from and how to silence them.
     if (isLoggingEnabled()) {
       // eslint-disable-next-line no-console
       console.log(
@@ -125,7 +156,6 @@ export function App(props: {
 
   const handleSettingsChange = useCallback((next: ChatSettings) => {
     setSettings(next);
-    // Verbose logging is the one setting with a side-effect outside state.
     setLoggingEnabled(next.verboseLogging);
     try {
       if (typeof localStorage !== "undefined") {
@@ -148,76 +178,103 @@ export function App(props: {
 
   const modelLoaded = loadedModelId === selectedModelId && loadState.status === "ready";
   const modelLoading = loadState.status === "loading";
+  const selectedModel = MODELS.find((m) => m.id === selectedModelId);
 
   return (
-    <div className="app-root">
-      <div className="chat-pane" data-executor-ready={executorReady ? "true" : "false"}>
-        <header className="chat-header">
-          <span>micro:bit Assistant</span>
-          <div className="model-picker">
-            <select
-              className="model-select"
-              value={selectedModelId}
-              onChange={(e) => setSelectedModelId(e.target.value as ModelId)}
+    <div className="app-shell" style={buildCssVars(settings)}>
+      <div className="app-card">
+        <div className="chat-pane" data-executor-ready={executorReady ? "true" : "false"}>
+          <header className="chat-header">
+            <span style={{ fontSize: 28, lineHeight: 1, flexShrink: 0 }}>🤖</span>
+            <div className="header-title-group">
+              <div className="header-title">micro:bit Assistant</div>
+              <div className="header-sub-row">
+                <div className="model-selector-wrap" ref={modelDropdownRef}>
+                  <button
+                    className="model-selector-btn"
+                    onClick={() => setModelDropdownOpen((v) => !v)}
+                    disabled={modelLoading}
+                    data-testid="model-select"
+                    aria-haspopup="listbox"
+                    aria-expanded={modelDropdownOpen}
+                  >
+                    {selectedModel?.shortLabel ?? "Select model"}
+                    <span className="model-selector-chevron">▼</span>
+                  </button>
+                  {modelDropdownOpen && (
+                    <div className="model-dropdown" role="listbox">
+                      {MODELS.map((m) => (
+                        <div
+                          key={m.id}
+                          role="option"
+                          aria-selected={m.id === selectedModelId}
+                          className={`model-dropdown-item${m.id === selectedModelId ? " active" : ""}`}
+                          onClick={() => {
+                            setSelectedModelId(m.id as ModelId);
+                            setModelDropdownOpen(false);
+                          }}
+                        >
+                          {m.shortLabel}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {modelLoaded ? (
+                  <span className="model-loaded-badge" data-testid="model-status">model loaded</span>
+                ) : (
+                  <button
+                    className="model-load-btn"
+                    onClick={() => loadModel(selectedModelId)}
+                    disabled={modelLoading}
+                    data-testid="model-load"
+                  >
+                    {modelLoading ? "Loading…" : "Load model"}
+                  </button>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="settings-btn"
+              onClick={() => setSettingsOpen((v) => !v)}
               disabled={modelLoading}
-              data-testid="model-select"
+              aria-label="Open settings"
+              aria-expanded={settingsOpen}
+              data-testid="settings-toggle"
+              title="Settings"
             >
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id} title={m.label}>{m.shortLabel}</option>
-              ))}
-            </select>
-            {modelLoaded ? (
-              <span className="model-loaded" data-testid="model-status">model loaded</span>
-            ) : (
-              <button
-                className="model-load-btn"
-                onClick={() => loadModel(selectedModelId)}
-                disabled={modelLoading}
-                data-testid="model-load"
-              >
-                {modelLoading ? "Loading…" : "Load model"}
-              </button>
+              <SettingsIcon />
+            </button>
+          </header>
+          <div className="chat-body">
+            <ChatThread key={chatEpoch} adapter={adapter} />
+            {!modelLoaded && loadState.status !== "loading" && loadState.status !== "unsupported" && loadState.status !== "error" && (
+              <ModelNotLoadedOverlay />
             )}
+            <LoadOverlay state={loadState} onRetry={() => loadModel(selectedModelId)} />
           </div>
-          <button
-            type="button"
-            className="settings-btn"
-            onClick={() => setSettingsOpen((v) => !v)}
-            disabled={modelLoading}
-            aria-label="Open settings"
-            aria-expanded={settingsOpen}
-            data-testid="settings-toggle"
-            title="Settings"
-          >
-            <SettingsIcon />
-          </button>
-        </header>
-        <div className="chat-body">
-          <ChatThread key={chatEpoch} adapter={adapter} />
-          {!modelLoaded && loadState.status !== "loading" && loadState.status !== "unsupported" && loadState.status !== "error" && (
-            <ModelNotLoadedOverlay />
+          {settingsOpen && (
+            <SettingsPanel
+              settings={settings}
+              onChange={handleSettingsChange}
+              onClose={() => setSettingsOpen(false)}
+              onResetChat={() => {
+                handleResetChat();
+                setSettingsOpen(false);
+              }}
+              onResetEditor={handleResetEditor}
+            />
           )}
-          <LoadOverlay state={loadState} onRetry={() => loadModel(selectedModelId)} />
         </div>
-        {settingsOpen && (
-          <SettingsPanel
-            settings={settings}
-            onChange={handleSettingsChange}
-            onClose={() => setSettingsOpen(false)}
-            onResetChat={() => {
-              handleResetChat();
-              setSettingsOpen(false);
-            }}
-            onResetEditor={handleResetEditor}
-          />
-        )}
-      </div>
-      <div className="editor-pane">
-        <MakeCodePanel onExecutorReady={handleExecutorReady} />
+        <div className="editor-pane">
+          <MakeCodePanel onExecutorReady={handleExecutorReady} />
+        </div>
       </div>
     </div>
   );
 }
+
 
 function ModelNotLoadedOverlay() {
   return (
