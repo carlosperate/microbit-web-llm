@@ -14,7 +14,13 @@ export class PuppeteerTabPool implements TabPool {
   }
 
   private shell(): Promise<ShellServer> {
-    if (!this.shellPromise) this.shellPromise = startShellServer();
+    if (!this.shellPromise) {
+      const p = startShellServer().catch((err) => {
+        if (this.shellPromise === p) this.shellPromise = null;
+        throw err;
+      });
+      this.shellPromise = p;
+    }
     return this.shellPromise;
   }
 
@@ -29,14 +35,18 @@ export class PuppeteerTabPool implements TabPool {
 
   private renderPage(): Promise<PageLike> {
     if (!this.renderPagePromise) {
-      this.renderPagePromise = (async () => {
+      const p = (async () => {
         const [shell, page] = await Promise.all([
           this.shell(),
           this.browser.openPage(),
         ]);
         await page.goto(shell.renderUrl, { waitUntil: "domcontentloaded" });
         return page;
-      })();
+      })().catch((err) => {
+        if (this.renderPagePromise === p) this.renderPagePromise = null;
+        throw err;
+      });
+      this.renderPagePromise = p;
     }
     return this.renderPagePromise;
   }

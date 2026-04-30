@@ -1,6 +1,6 @@
 import type { InitProgressReport } from "@mlc-ai/web-llm";
 import type { ChatCompletionFn, OpenAIMessage, StreamChunk } from "./tool-loop.js";
-import { createLogger } from "makecode-mcp/browser";
+import { createLogger, preview } from "makecode-mcp/browser";
 
 const log = createLogger("webllm");
 
@@ -78,11 +78,11 @@ async function* parseToolCallStream(
     if (choice.delta?.content) buffer += choice.delta.content;
     if (choice.finish_reason) finish = choice.finish_reason;
   }
-  // Raw, unaltered model output (pre-parse, pre-filter) for debugging tool-call
-  // failures. Printed verbatim so newlines/whitespace/markdown are visible.
-  console.log(
-    `[webllm] raw model output (${buffer.length} chars, finish=${finish}):\n${buffer}`,
-  );
+  log.debug("raw model output", {
+    finish,
+    bytes: buffer.length,
+    sample: preview(buffer),
+  });
   let parsed: Array<{ name: string; arguments: unknown }> = [];
   if (buffer.trim().length > 0) {
     try {

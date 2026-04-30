@@ -22,13 +22,19 @@ export class BrowserPool {
     if (this.browser?.isConnected()) return this.browser;
     if (this.launching) return this.launching;
     this.browser = null;
-    this.launching = (async () => {
-      const b = await this.launcher();
-      this.browser = b;
-      this.launching = null;
-      return b;
-    })();
-    return this.launching;
+    const launching = this.launcher().then(
+      (b) => {
+        this.browser = b;
+        if (this.launching === launching) this.launching = null;
+        return b;
+      },
+      (err) => {
+        if (this.launching === launching) this.launching = null;
+        throw err;
+      },
+    );
+    this.launching = launching;
+    return launching;
   }
 
   async openPage(): Promise<PageLike> {

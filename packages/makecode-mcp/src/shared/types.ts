@@ -1,4 +1,4 @@
-export type SessionErrorCode = "missing" | "unknown" | "expired";
+export type SessionErrorCode = "missing" | "unknown";
 
 export class SessionError extends Error {
   readonly code: SessionErrorCode;

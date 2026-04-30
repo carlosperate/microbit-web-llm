@@ -90,13 +90,20 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
 
   async setProject(project: MakeCodeProjectFiles): Promise<void> {
     // Optimistic cache update so a getProject() immediately after returns the new state.
+    const previous = this.latestFiles;
     this.latestFiles = project;
-    await this.driver.importProject({
-      project: {
-        ...(this.latestHeader ? { header: this.latestHeader } : {}),
-        text: project.text,
-      },
-    });
+    try {
+      await this.driver.importProject({
+        project: {
+          ...(this.latestHeader ? { header: this.latestHeader } : {}),
+          text: project.text,
+        },
+      });
+    } catch (err) {
+      // Import never reached the editor — roll back the cache so reads don't lie.
+      this.latestFiles = previous;
+      throw err;
+    }
     // Importing with an empty main.blocks lands the editor in JS view. Force
     // blocks view so MakeCode decompiles main.ts into blocks for display.
     // If the decompile fails (invalid TS), MakeCode shows its own error popup
