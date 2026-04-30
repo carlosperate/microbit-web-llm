@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { runToolLoop } from "../src/chat/tool-loop.js";
-import type { ChatCompletionFn, StreamChunk } from "../src/chat/tool-loop.js";
+import type { ChatCompletionFn, StreamChunk, ToolLoopEvent } from "../src/chat/tool-loop.js";
 import type { BrowserExecutor } from "makecode-mcp/browser";
 
 function makeExecutor(overrides: Partial<BrowserExecutor> = {}): BrowserExecutor {
@@ -449,11 +449,13 @@ describe("runToolLoop", () => {
   });
 
   it("stops after maxSteps to avoid infinite loops", async () => {
+    // Each call uses different args so the repeat-call guard does not trip.
+    let i = 0;
     const engine: ChatCompletionFn = async () =>
       asStream([
         chunk({
           tool_calls: [
-            { index: 0, id: "x", function: { name: "get_current_code", arguments: "{}" } },
+            { index: 0, id: `c${i}`, function: { name: "set_code", arguments: `{"code":"v${i++}"}` } },
           ],
         }),
         chunk({}, "tool_calls"),
@@ -470,5 +472,41 @@ describe("runToolLoop", () => {
         // drain
       }
     }).rejects.toThrow(/max.*step/i);
+  });
+
+  it("breaks out to a plain-text follow-up when the model repeats a tool call", async () => {
+    const calls: string[] = [];
+    const engine: ChatCompletionFn = async ({ tools }) => {
+      // The recovery call passes tools=[] — return the plain-text reply there.
+      if (tools.length === 0) {
+        return asStream([chunk({ content: "Stopped looping." }, "stop")]);
+      }
+      // Both tool-bearing turns request the exact same call → repeat on turn 2.
+      return asStream([
+        chunk({
+          tool_calls: [
+            { index: 0, id: "c", function: { name: "get_current_code", arguments: "{}" } },
+          ],
+        }),
+        chunk({}, "tool_calls"),
+      ]);
+    };
+    const events: ToolLoopEvent[] = [];
+    for await (const e of runToolLoop({
+      completion: engine,
+      executor: makeExecutor(),
+      messages: [{ role: "user", content: "go" }],
+      tools: [{ name: "get_current_code", description: "", parameters: { type: "object", properties: {} } } as never],
+      signal: new AbortController().signal,
+      maxSteps: 10,
+    })) {
+      events.push(e);
+      if (e.type === "tool-call") calls.push(e.name);
+    }
+    // First call dispatches; second turn detects repeat and skips dispatch.
+    expect(calls).toEqual(["get_current_code"]);
+    expect(events.filter((e) => e.type === "text-delta").map((e) => (e as { delta: string }).delta).join("")).toBe(
+      "Stopped looping.",
+    );
   });
 });

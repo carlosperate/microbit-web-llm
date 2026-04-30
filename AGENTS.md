@@ -70,6 +70,16 @@ Do not throw a generic error. The message is part of the LLM interaction loop.
 
 Every new piece of production code lands with a failing test authored *before* the implementation. Red → green → refactor. Writing tests after the fact overfits them to whatever the code happens to do, masking wrong behaviour. Unit tests (Vitest) live under `packages/*/test/`; integration/e2e tests (Playwright) live under the same `test/` tree but run only via `npm run test:e2e`. Spike scripts are exempt — their self-assertions are their tests.
 
+### Keep tests and docs in sync with the code
+
+When a change alters observable behaviour or a documented contract, update the relevant tests and docs in the same commit. Concretely:
+- If you change how a function/class behaves (new branch, new error path, new recovery, removed feature), update or add the corresponding unit test. If a test now passes for the wrong reason, fix the test rather than leaving it as-is.
+- If you change something this file (`AGENTS.md`) describes — tool-loop recovery branches, flattening rules, system-prompt contract, executor interfaces, layering, logging namespaces — update the matching section. `AGENTS.md` is the working spec; stale entries here mislead future agents.
+- If you change the system prompt, update `packages/app/test/system-prompt.test.ts` and any AGENTS.md guidance about what the prompt must/must not contain.
+- If you change a public README example (root `README.md`, `packages/makecode-mcp/README.md`), make sure the example still runs.
+
+Skip doc/test updates only for changes that are genuinely invisible from outside (renaming a local variable, comment cleanup, formatting). When in doubt, update.
+
 ### No shared state between chat and editor panels
 
 The only connection between `ChatPanel` and `MakeCodePanel` in the app is the `IframeExecutor` instance passed as a prop. Do not introduce a global store, context, or event bus for this. Keep it a direct dependency.
@@ -207,6 +217,21 @@ Do not truncate or drop tool-call messages from the history mid-loop. The full t
 The loop also handles Qwen-specific quirks:
 - **Empty `tool_calls` as done-signal** — when `finish_reason === "tool_calls"` but no calls were produced (the schema-constrained model emitted `[]`), the loop makes one follow-up call with `tools: []` to let the model stream a plain-text reply, then returns. This never recurses.
 - **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`set_code`, `get_current_code`, `get_blocks_image`, `get_hex_file`, or the `_from_code` variants). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
+- **Repeat-call recovery** — the smaller models sometimes ignore the system-prompt rule "never call the same tool twice" and lock into a single-tool loop (e.g. `get_current_code` every step). `runToolLoop` tracks every dispatched `(name + arguments)` in a `seenCalls` set; when a batch arrives where *every* call is a repeat, it skips dispatch and yields the plain-text follow-up instead of hammering the same tool until `maxSteps` trips. A mixed batch (some new, some repeats) still dispatches — interleaved reads are legitimate.
+
+The plain-text follow-up itself is shared across all three exits (done-signal, repeat-call, stall fallback) via a local `plainTextFollowUp(label)` generator that streams from a tools-disabled completion.
+
+### WebLLM history flattening
+
+WebLLM's chat templates (e.g. Qwen2.5-Coder) reject `role: "tool"` and assistant messages carrying `tool_calls`, and additionally enforce that the last message be `user` or `tool` (`MessageOrderError`). This engine bypasses WebLLM's native tool-calling path and drives the model with a custom system prompt + JSON grammar, so the tool exchange only needs to be visible to the model as text.
+
+`flattenToolHistory` in `webllm-engine.ts` collapses each assistant `tool_calls` message together with the immediately following `tool` results into a single assistant text message (the JSON the model itself emitted, plus `[result <name>] <content>` lines). This preserves the `user → assistant → user → assistant` alternation the model expects. An earlier attempt that emitted tool results as fresh `user` turns made the model treat every result as a new request and loop forever between `get_blocks_image` and `get_hex_file` until `maxSteps` tripped.
+
+After collapsing, if the last message is `assistant`, a fixed `TOOL_CONTINUATION_PROMPT` is appended as a `user` message to satisfy WebLLM's last-message rule. The text nudges the model to stop calling tools and produce a plain-text explanation; it deliberately does **not** mention `[]` because spelling out `[]` in the prompt biased the model toward emitting empty arrays even when it should have called tools.
+
+Image (`get_blocks_image*`, ~21KB base64) and hex (`get_hex_file*`, ~1.7MB base64) tool results are stubbed to a short summary in the flattened history. The model cannot use the bytes anyway, and feeding the hex back through WebLLM's tokenizer overflowed the JS stack with "Maximum call stack size exceeded".
+
+The same flatten runs on the tools-disabled follow-up path — WebLLM's role rules apply regardless of whether `tools` was passed in.
 
 Because the browser target has no sessions, the loop is stateless: no `session_id` injection, no next-step hint enrichment, no ordering of a setup call before siblings. If you add a new tool, just add a case to the `dispatchTool` switch.
 

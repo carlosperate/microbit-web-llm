@@ -151,10 +151,34 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
   const { completion, executor, tools, signal, completionOptions } = opts;
   const maxSteps = opts.maxSteps ?? 10;
   const history: OpenAIMessage[] = [...opts.messages];
+
+  // Stream a tools-disabled completion, yielding text deltas. Used whenever
+  // the loop terminates: the model emitted [] (its done-signal), or repeat
+  // calls forced an early exit. Caller is responsible for logging the reason.
+  async function* plainTextFollowUp(label: string): AsyncIterable<ToolLoopEvent> {
+    const followUp = await completion({ messages: history, tools: [], signal, options: completionOptions });
+    let text = "";
+    for await (const chunk of followUp) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        text += content;
+        yield { type: "text-delta", delta: content };
+      }
+    }
+    log.info(`plain-text follow-up complete (${label})`, { chars: text.length, preview: preview(text) });
+  }
   // Fires at most once per run: when the model stalls (emits []) before doing
   // any substantive work, inject a reminder and retry instead of falling back
   // to a tools-disabled plain-text reply.
   let stallRetried = false;
+
+  // Track every (name + args) we've actually dispatched this run. The smaller
+  // models in the picker sometimes ignore the system-prompt rule "never call
+  // the same tool twice" and lock into a single-tool loop (e.g. get_current_code
+  // every step). A deterministic guard here cuts the loop short.
+  const seenCalls = new Set<string>();
+  const callKey = (c: PendingToolCall) => `${c.name}:${c.arguments || "{}"}`;
 
   log.group(`runToolLoop (maxSteps=${maxSteps}, tools=${tools.length}, history=${history.length})`);
   try {
@@ -186,6 +210,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         finish,
         pendingCalls: pending.length,
         textChars: assistantText.length,
+        ...(assistantText.length > 0 ? { textPreview: preview(assistantText) } : {}),
       });
 
       if (finish === "tool_calls" && pending.length === 0) {
@@ -208,18 +233,24 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
           continue;
         }
         log.info("empty tool_calls after substantive work → follow-up with tools disabled for plain-text reply");
-        const followUp = await completion({ messages: history, tools: [], signal, options: completionOptions });
-        for await (const chunk of followUp) {
-          if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-          const content = chunk.choices[0]?.delta?.content;
-          if (content) yield { type: "text-delta", delta: content };
-        }
-        log.info("plain-text follow-up complete");
+        yield* plainTextFollowUp("done-signal");
         return;
       }
 
       if (finish === "tool_calls" || pending.length > 0) {
         const calls = pending;
+        // If every call in this batch is a repeat of one we already dispatched,
+        // the model is stuck — drop into the plain-text follow-up so the user
+        // gets an explanation instead of watching us hammer the same tool until
+        // maxSteps trips.
+        if (calls.every((c) => seenCalls.has(callKey(c)))) {
+          log.warn(
+            `step ${step + 1}: every requested call is a repeat (${calls.map((c) => c.name).join(", ")}) → forcing plain-text follow-up`,
+          );
+          yield* plainTextFollowUp("repeat-call recovery");
+          return;
+        }
+        for (const c of calls) seenCalls.add(callKey(c));
         log.info(
           `dispatching ${calls.length} tool call(s) sequentially: ${calls.map((c) => c.name).join(", ")}`,
         );

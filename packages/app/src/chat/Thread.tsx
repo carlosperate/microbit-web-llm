@@ -79,6 +79,7 @@ function AssistantMessage() {
             tools: { Fallback: ToolCallView },
           }}
         />
+        {isRunning && <ThinkingIndicator />}
         <AssistantError />
       </div>
     </MessagePrimitive.Root>

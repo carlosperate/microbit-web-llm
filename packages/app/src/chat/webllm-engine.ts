@@ -69,32 +69,46 @@ export function isWebGPUSupported(): boolean {
 // messages carrying `tool_calls`. This engine bypasses WebLLM's native
 // tool-calling path and drives the model with a custom system prompt + JSON
 // grammar, so the tool exchange only needs to be visible to the model as text.
-// Flatten assistant tool_calls into an assistant text message holding the JSON
-// array the model itself emitted, and fold each tool result into a user
-// message tagged with the call name.
+//
+// Collapse each assistant `tool_calls` message together with the immediately
+// following `tool` result messages into a single assistant text message. This
+// preserves the user→assistant→user→assistant alternation the model expects;
+// emitting tool results as fresh user turns made the model treat every tool
+// result as a new request and loop forever between get_blocks_image and
+// get_hex_file until maxSteps tripped.
 function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
-  const callName = new Map<string, string>();
   const out: OpenAIMessage[] = [];
-  for (const m of messages) {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      for (const tc of m.tool_calls) callName.set(tc.id, tc.function.name);
+      const idToName = new Map(m.tool_calls.map((tc) => [tc.id, tc.function.name]));
       const calls = m.tool_calls.map((tc) => ({
         name: tc.function.name,
         arguments: safeParseArgs(tc.function.arguments),
       }));
-      const text = m.content ? `${m.content}\n${JSON.stringify(calls)}` : JSON.stringify(calls);
-      out.push({ role: "assistant", content: text });
-      continue;
-    }
-    if (m.role === "tool") {
-      const name = callName.get(m.tool_call_id) ?? "tool";
-      out.push({ role: "user", content: `[tool result: ${name}]\n${stubLargeResult(name, m.content)}` });
+      const lines = [JSON.stringify(calls)];
+      while (i + 1 < messages.length && messages[i + 1].role === "tool") {
+        const t = messages[++i] as Extract<OpenAIMessage, { role: "tool" }>;
+        const name = idToName.get(t.tool_call_id) ?? "tool";
+        lines.push(`[result ${name}] ${stubLargeResult(name, t.content)}`);
+      }
+      const content = m.content ? [m.content, ...lines].join("\n") : lines.join("\n");
+      out.push({ role: "assistant", content });
       continue;
     }
     out.push(m);
   }
+  // WebLLM also enforces that the last message be `user` or `tool`. After a
+  // tool round-trip the collapsed history ends with `assistant`, so append a
+  // fixed continuation prompt that nudges the model to stop calling tools.
+  if (out.length > 0 && out[out.length - 1].role === "assistant") {
+    out.push({ role: "user", content: TOOL_CONTINUATION_PROMPT });
+  }
   return out;
 }
+
+const TOOL_CONTINUATION_PROMPT =
+  "(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, do not call get_hex_file unless the student asked for it, and do not call any image tool just to look at code.)";
 
 // Tool results that are large opaque blobs the model cannot use — feeding them
 // back through tokenization wastes context and, for hex (~1.7MB base64), blows
@@ -205,8 +219,12 @@ export async function loadWebLLM(
       sampling: samplingOpts,
     });
     if (!hasTools) {
+      // Same flatten as the tools path: WebLLM rejects role: "tool" and
+      // assistant tool_calls regardless of whether tools are passed in.
+      const system = messages.filter((m) => m.role === "system");
+      const rest = flattenToolHistory(messages.filter((m) => m.role !== "system"));
       const stream = await engine.chat.completions.create({
-        messages: messages as any,
+        messages: [...system, ...rest] as any,
         stream: true,
         ...samplingOpts,
       });
