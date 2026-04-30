@@ -65,6 +65,58 @@ export function isWebGPUSupported(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
+// WebLLM's chat templates (e.g. Qwen2.5) reject `role: "tool"` and assistant
+// messages carrying `tool_calls`. This engine bypasses WebLLM's native
+// tool-calling path and drives the model with a custom system prompt + JSON
+// grammar, so the tool exchange only needs to be visible to the model as text.
+// Flatten assistant tool_calls into an assistant text message holding the JSON
+// array the model itself emitted, and fold each tool result into a user
+// message tagged with the call name.
+function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
+  const callName = new Map<string, string>();
+  const out: OpenAIMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      for (const tc of m.tool_calls) callName.set(tc.id, tc.function.name);
+      const calls = m.tool_calls.map((tc) => ({
+        name: tc.function.name,
+        arguments: safeParseArgs(tc.function.arguments),
+      }));
+      const text = m.content ? `${m.content}\n${JSON.stringify(calls)}` : JSON.stringify(calls);
+      out.push({ role: "assistant", content: text });
+      continue;
+    }
+    if (m.role === "tool") {
+      const name = callName.get(m.tool_call_id) ?? "tool";
+      out.push({ role: "user", content: `[tool result: ${name}]\n${stubLargeResult(name, m.content)}` });
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+// Tool results that are large opaque blobs the model cannot use — feeding them
+// back through tokenization wastes context and, for hex (~1.7MB base64), blows
+// the WebLLM tokenizer stack with "Maximum call stack size exceeded".
+function stubLargeResult(name: string, content: string): string {
+  if (name === "get_blocks_image" || name === "get_blocks_image_from_code") {
+    return `{"pngBase64":"<image rendered, ${content.length} bytes — not shown>"}`;
+  }
+  if (name === "get_hex_file" || name === "get_hex_file_from_code") {
+    return `<hex compiled, ${content.length} bytes — not shown>`;
+  }
+  return content;
+}
+
+function safeParseArgs(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 async function* parseToolCallStream(
   stream: AsyncIterable<any>,
 ): AsyncIterable<StreamChunk> {
@@ -173,7 +225,7 @@ export async function loadWebLLM(
     const systemPrompt = appSystem ? `${appSystem}\n\n${toolsPrompt}` : toolsPrompt;
     const withSystem: OpenAIMessage[] = [
       { role: "system", content: systemPrompt },
-      ...messages.filter((m) => m.role !== "system"),
+      ...flattenToolHistory(messages.filter((m) => m.role !== "system")),
     ];
     log.debug("tool-call transform", {
       systemPromptChars: systemPrompt.length,
