@@ -4,7 +4,11 @@ import {
   MessagePartPrimitive,
   ThreadPrimitive,
   useMessage,
+  useMessagePartText,
 } from "@assistant-ui/react";
+import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 
 export function Thread() {
   return (
@@ -30,6 +34,25 @@ const TextPart = () => (
     <MessagePartPrimitive.Text />
   </div>
 );
+
+// Some models emit malformed fenced blocks like "```ts code...```".
+// Normalise those to standard fenced markdown so the renderer can parse them.
+function normalizeFences(text: string): string {
+  return text.replace(/```([a-zA-Z0-9_-]+)[ \t]+([^\n][\s\S]*?)```/g, (_m, lang, code) => {
+    const trimmed = String(code).trim();
+    return `\n\n\`\`\`${lang}\n${trimmed}\n\`\`\`\n\n`;
+  });
+}
+
+function AssistantTextPart() {
+  const part = useMessagePartText();
+  const markdown = normalizeFences(part.text ?? "");
+  return (
+    <div className="text-part assistant-markdown">
+      <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{markdown}</ReactMarkdown>
+    </div>
+  );
+}
 
 function EmptyState() {
   return (
@@ -74,7 +97,7 @@ function AssistantMessage() {
       <div className="message-content message-content-parts">
         <MessagePrimitive.Parts
           components={{
-            Text: TextPart,
+            Text: AssistantTextPart,
             Image: ImagePart,
             tools: { Fallback: ToolCallView },
           }}

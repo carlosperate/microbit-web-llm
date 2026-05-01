@@ -13,9 +13,12 @@
   "dependencies": {
     "@assistant-ui/react": "^0.12.25",
     "@mlc-ai/web-llm": "^0.2.82",
+    "highlight.js": "^11.11.1",
     "makecode-mcp": "*",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
