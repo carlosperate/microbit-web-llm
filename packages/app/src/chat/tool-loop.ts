@@ -279,7 +279,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
           try {
             const result = await dispatchTool(executor, c.name, args);
             endCall();
-            log.info(`  ← ${c.name} ok`, { resultBytes: result.length, preview: preview(result) });
+            log.info(`  ← ${c.name} ok`, { resultBytes: result.length, preview: preview(result, 512) });
             results.push({ call: c, args, result, isError: false });
           } catch (err) {
             endCall();

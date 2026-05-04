@@ -49,28 +49,40 @@ export interface Logger {
   child: (sub: string) => Logger;
 }
 
+const NOOP = (): void => {};
+
 export function createLogger(namespace: string): Logger {
   const prefix = `[mkcp:${namespace}]`;
   const styled: [string, string] = [`%c${prefix}`, `color:${colorFor(namespace)};font-weight:600`];
 
+  // Bind the underlying console method with the prefix already applied. The
+  // bound function preserves the user's call site in DevTools (clickable
+  // file:line), unlike a wrapping function which would point here.
   // In Node, route everything to console.error (writes to stderr; preserves
-  // stdout for the MCP stdio transport). In the browser, use the matching
-  // console method so devtools filter levels correctly.
-  const emit = (method: Method, args: unknown[]) => {
-    if (!enabled) return;
-    if (isNode) console.error(prefix, ...args);
-    else (console[method] ?? console.log).call(console, ...styled, ...args);
+  // stdout for the MCP stdio transport).
+  const bind = (method: Method): (...args: unknown[]) => void => {
+    if (isNode) return console.error.bind(console, prefix);
+    const fn = console[method] ?? console.log;
+    return fn.bind(console, ...styled);
+  };
+  const bound = {
+    info: bind("info"),
+    warn: bind("warn"),
+    error: bind("error"),
+    debug: bind("debug"),
   };
 
   const now = () =>
     typeof performance !== "undefined" ? performance.now() : Date.now();
 
-  return {
-    info: (...a) => emit("info", a),
-    warn: (...a) => emit("warn", a),
-    error: (...a) => emit("error", a),
-    debug: (...a) => emit("debug", a),
-    group: (label, collapsed = false) => {
+  // Getters return either the bound console method (call site preserved) or a
+  // noop, so the runtime `setLoggingEnabled` toggle still works.
+  const logger = {
+    get info() { return enabled ? bound.info : NOOP; },
+    get warn() { return enabled ? bound.warn : NOOP; },
+    get error() { return enabled ? bound.error : NOOP; },
+    get debug() { return enabled ? bound.debug : NOOP; },
+    group: (label: string, collapsed = false) => {
       if (!enabled) return;
       if (isNode) console.error(prefix, label);
       else (collapsed ? console.groupCollapsed : console.group).call(console, ...styled, label);
@@ -78,16 +90,17 @@ export function createLogger(namespace: string): Logger {
     groupEnd: () => {
       if (enabled && !isNode) console.groupEnd();
     },
-    time: (label) => {
+    time: (label: string) => {
       const start = now();
-      return () => emit("info", [`${label} took ${(now() - start).toFixed(1)}ms`]);
+      return () => { if (enabled) bound.info(`${label} took ${(now() - start).toFixed(1)}ms`); };
     },
-    child: (sub) => createLogger(`${namespace}:${sub}`),
+    child: (sub: string) => createLogger(`${namespace}:${sub}`),
   };
+  return logger as Logger;
 }
 
 /** Summarise a large value as a short preview plus its length. */
-export function preview(value: unknown, maxChars = 160): string {
+export function preview(value: unknown, maxChars = 2000): string {
   if (value == null) return String(value);
   const s = typeof value === "string" ? value : safeStringify(value);
   if (s.length <= maxChars) return JSON.stringify(s);
