@@ -16,7 +16,8 @@
     "dev:test-page": "vite --config test-page/vite.config.ts",
     "test:e2e": "playwright test --config playwright.config.ts",
     "start:server": "node dist/server/bin.js",
-    "dev:test-mcp": "npm run build && npx @modelcontextprotocol/inspector node dist/server/bin.js"
+    "dev:test-mcp": "npm run build && npx @modelcontextprotocol/inspector node dist/server/bin.js --headed",
+    "dev:test-mcp-headless": "npm run build && npx @modelcontextprotocol/inspector node dist/server/bin.js"
   },
   "dependencies": {
     "@microbit/makecode-embed": "^0.5.0",

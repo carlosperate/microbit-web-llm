@@ -225,18 +225,27 @@ export function loadWebLLM(
     // network/cache fetches inside reload, which is how we cancel.
     const engine = new webllm.MLCEngine({
       initProgressCallback: (r) => {
+        // Throwing here is the ONLY way to actually stop a cache-load
+        // mid-flight. WebLLM's reloadController is only consulted by the
+        // network fetches; the cache-load loop in `fetchTensorCacheInternal`
+        // calls `artifactCache.fetchWithCache` without a signal (see
+        // @mlc-ai/web-llm/lib/index.js, the loading-phase shard loop), so
+        // engine.unload() alone lets the load run to completion, uploading
+        // every shard to the GPU. The throw propagates out of the
+        // progress-emitting for-loop, out of fetchTensorCacheInternal, and
+        // is caught by our `await engine.reload()` try/catch below.
+        //
+        // Gated on `cancelled` so a normal load is unaffected.
+        if (cancelled) throw new LoadCancelledError();
         if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
           log.info("load progress", { progress: r.progress, text: r.text });
         }
         onProgress(r);
       },
     });
-    // Cancellation strategy: engine.unload() aborts the AbortController used
-    // by the config/wasm/tensor fetches. The non-fetch steps (WASM init, GPU
-    // detect, shader compile) ignore the signal, so on a hot cache cancel may
-    // appear delayed until the next signal-respecting yield — acceptable
-    // tradeoff for not throwing across the WASM/TVM callback boundary, which
-    // observably halts progress events on at least some Chromium builds.
+    // Also fire engine.unload() — that aborts the AbortController used by
+    // the *download-phase* fetches (fast path when cancel happens before the
+    // cache is populated). The throw above handles the cache-load path.
     cancelFn = () => {
       log.info("loadWebLLM: cancel requested → engine.unload()");
       engine.unload().catch((err) => log.warn("engine.unload() during cancel rejected", err));
@@ -250,7 +259,14 @@ export function loadWebLLM(
     } finally {
       endLoad();
     }
-    if (cancelled) throw new LoadCancelledError();
+    if (cancelled) {
+      // Reload returned successfully despite cancel (possible if cancel
+      // landed between the final progress tick and the resolve). Fully
+      // unload now so the just-loaded pipeline + GPU buffers don't linger.
+      log.info("loadWebLLM: reload completed after cancel → unloading engine");
+      engine.unload().catch((err) => log.warn("post-cancel unload rejected", err));
+      throw new LoadCancelledError();
+    }
     log.info("engine ready", { modelId });
 
     return async ({ messages, tools, signal: _signal, options }) => {

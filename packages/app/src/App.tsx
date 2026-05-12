@@ -96,21 +96,34 @@ export function App(props: {
     // abort the previous one or two concurrent reloads race the engine.
     loadHandleRef.current?.cancel();
     setLoadState({ status: "loading", progress: 0, text: "Starting…", modelId });
-    const handle = loadWebLLM(
-      (r) => setLoadState({ status: "loading", progress: r.progress ?? 0, text: r.text, modelId }),
+    // Wrap the progress callback so a load that's been cancelled (or
+    // superseded by another loadModel call) can't keep stomping the UI back
+    // into the loading state — WebLLM keeps firing progress events all the
+    // way through to "Finish loading on WebGPU" even after engine.unload().
+    let handle: LoadHandle | null = null;
+    handle = loadWebLLM(
+      (r) => {
+        if (loadHandleRef.current !== handle) return;
+        setLoadState({ status: "loading", progress: r.progress ?? 0, text: r.text, modelId });
+      },
       modelId,
     );
     loadHandleRef.current = handle;
     try {
-      completionRef.current = await handle.promise;
-      if (loadHandleRef.current !== handle) return; // superseded by another load
+      const completion = await handle.promise;
+      if (loadHandleRef.current !== handle) return; // superseded or cancelled
+      completionRef.current = completion;
       loadHandleRef.current = null;
       setLoadedModelId(modelId);
       setChatEpoch((n) => n + 1);
       setLoadState({ status: "ready" });
       log.info("model ready → chat thread remounted (new epoch)", { modelId });
     } catch (err) {
-      if (loadHandleRef.current === handle) loadHandleRef.current = null;
+      // Superseded by a newer load (or the cancel handler already reset state).
+      // Either way, the surviving owner of UI state is whoever set
+      // loadHandleRef.current — don't trample on it.
+      if (loadHandleRef.current !== handle) return;
+      loadHandleRef.current = null;
       if (err instanceof LoadCancelledError) {
         log.info("model load cancelled by user", { modelId });
         completionRef.current = null;
@@ -129,6 +142,16 @@ export function App(props: {
     const handle = loadHandleRef.current;
     if (!handle) return;
     log.info("user: cancel model load");
+    // Update UI synchronously so the user sees the cancel take effect even if
+    // WebLLM's internal load loop continues. On cache hits, the load-from-cache
+    // phase in tvm.fetchTensorCacheInternal calls `artifactCache.fetchWithCache`
+    // *without* passing the abort signal, so engine.unload() can't actually
+    // stop that work — we let it run to completion in the background and drop
+    // the result via the handle-mismatch check in loadModel.
+    loadHandleRef.current = null;
+    completionRef.current = null;
+    setLoadedModelId(null);
+    setLoadState({ status: "idle" });
     handle.cancel();
   }, []);
 
