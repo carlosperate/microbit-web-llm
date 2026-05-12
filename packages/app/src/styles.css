@@ -24,7 +24,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100vh;
+  /* `dvh` tracks the dynamically-visible viewport on iOS Safari so the editor
+   * pane isn't hidden behind the collapsing URL bar. */
+  height: 100dvh;
   padding: 36px 48px;
 }
 
@@ -759,4 +761,57 @@ body {
     width: 31px;
     height: 31px;
   }
+}
+
+/* ── Mobile: chat 75dvh on top, MakeCode 75dvh below (page = 150dvh) ── */
+@media (max-width: 720px) {
+  /* Page becomes scrollable: 150dvh total. User starts on the chat (top
+   * 75dvh) and scrolls down to reach the MakeCode editor (next 75dvh).
+   * Override the desktop full-height lock so the body can grow past the
+   * viewport. */
+  html, body, #root {
+    height: auto;
+    min-height: 100dvh;
+  }
+  .app-shell {
+    padding: 0;
+    height: auto;
+    align-items: stretch;
+  }
+  .app-card {
+    flex-direction: column;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
+    height: auto;
+  }
+  /* Each pane is exactly 75dvh tall — explicit `flex: 0 0 75dvh` keeps the
+   * split stable regardless of inner content. The chat pane's composer is
+   * still `position: absolute` against the pane, so it sits at the bottom
+   * of the chat region (not stuck to the bottom of the viewport). */
+  .chat-pane {
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 75dvh;
+    height: 75dvh;
+  }
+  .editor-pane {
+    flex: 0 0 75dvh;
+    height: 75dvh;
+  }
+
+  /* iOS Safari zooms into any <input>/<textarea> with font-size < 16px on
+   * focus. Bump just the composer textarea — the surrounding chrome can
+   * stay tuned to the visual design. */
+  .composer-input {
+    font-size: 16px;
+  }
+
+  /* The header sub-row already wraps, but on a phone the model selector +
+   * load button + status pill can spill onto two lines. Compact them a touch
+   * so the title stays readable. */
+  .header-title { font-size: 14px; }
+  .model-selector-btn,
+  .model-load-btn,
+  .model-loaded-badge { font-size: 11px; }
 }
