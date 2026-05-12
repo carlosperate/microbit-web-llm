@@ -219,26 +219,24 @@ export function loadWebLLM(
     log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
     const webllm = await import("@mlc-ai/web-llm");
     if (cancelled) throw new LoadCancelledError();
+    // `new MLCEngine + engine.reload(modelId)` is the same pair `CreateMLCEngine`
+    // calls internally. We split them so we can hold an engine reference *before*
+    // reload begins — `engine.unload()` aborts the reloadController on the
+    // network/cache fetches inside reload, which is how we cancel.
     const engine = new webllm.MLCEngine({
       initProgressCallback: (r) => {
-        // WebLLM's abort signal only catches the cache/network fetches inside
-        // reload — WASM instantiation, GPU detect, tokenizer load, and shader
-        // pipeline compilation ignore it. On cache hits those steps dominate
-        // wall time, so engine.unload() alone leaves the UI stuck for many
-        // seconds before cancellation appears to take effect. Throwing from
-        // the progress callback short-circuits the load at the very next
-        // progress tick (both fetches and shader compilation emit progress).
-        if (cancelled) throw new LoadCancelledError();
         if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
           log.info("load progress", { progress: r.progress, text: r.text });
         }
         onProgress(r);
       },
     });
-    // Belt-and-braces: also abort the reloadController for the network/cache
-    // fetches that *do* check the signal — that path doesn't fire a progress
-    // tick on its own, so the callback-throw alone wouldn't catch a stall
-    // inside `fetchTensorCache` waiting on a slow disk read.
+    // Cancellation strategy: engine.unload() aborts the AbortController used
+    // by the config/wasm/tensor fetches. The non-fetch steps (WASM init, GPU
+    // detect, shader compile) ignore the signal, so on a hot cache cancel may
+    // appear delayed until the next signal-respecting yield — acceptable
+    // tradeoff for not throwing across the WASM/TVM callback boundary, which
+    // observably halts progress events on at least some Chromium builds.
     cancelFn = () => {
       log.info("loadWebLLM: cancel requested → engine.unload()");
       engine.unload().catch((err) => log.warn("engine.unload() during cancel rejected", err));
