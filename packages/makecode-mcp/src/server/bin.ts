@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import puppeteer from "puppeteer";
+import { BrowserPool } from "./browser-pool.js";
 import { PuppeteerTabPool } from "./puppeteer-tab-pool.js";
 import { TabExecutor } from "./tab-executor.js";
 import { buildMcpServer } from "./mcp-server.js";
 
 async function main() {
-  const pool = new PuppeteerTabPool(() =>
+  const launchHeadless = () =>
     puppeteer.launch({
       headless: true,
       defaultViewport: null,
       protocolTimeout: 300_000,
-    }),
-  );
+    });
+  const renderPool = new BrowserPool(launchHeadless);
+  const sessionPool = new BrowserPool(launchHeadless);
+  const pool = new PuppeteerTabPool({ renderPool, sessionPool });
   const executor = new TabExecutor(pool);
 
   const shutdown = async () => {

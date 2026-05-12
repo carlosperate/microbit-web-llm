@@ -12,7 +12,12 @@ export interface BrowserLike {
 
 export type BrowserLauncher = () => Promise<BrowserLike>;
 
-export class BrowserPool {
+export interface BrowserPoolLike {
+  openPage(): Promise<PageLike>;
+  dispose(): Promise<void>;
+}
+
+export class BrowserPool implements BrowserPoolLike {
   private browser: BrowserLike | null = null;
   private launching: Promise<BrowserLike> | null = null;
 

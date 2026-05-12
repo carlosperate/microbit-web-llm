@@ -1,16 +1,23 @@
 import type { MakeCodeDriver } from "../browser/driver-port.js";
-import { BrowserPool, type BrowserLauncher, type PageLike } from "./browser-pool.js";
+import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
 import { startShellServer, type ShellServer } from "./shell/shell-server.js";
 import type { TabHandle, TabPool } from "./tab-pool.js";
 
+export interface PuppeteerTabPoolOptions {
+  renderPool: BrowserPoolLike;
+  sessionPool: BrowserPoolLike;
+}
+
 export class PuppeteerTabPool implements TabPool {
-  private readonly browser: BrowserPool;
+  private readonly renderPool: BrowserPoolLike;
+  private readonly sessionPool: BrowserPoolLike;
   private shellPromise: Promise<ShellServer> | null = null;
   private renderPagePromise: Promise<PageLike> | null = null;
 
-  constructor(launcher: BrowserLauncher) {
-    this.browser = new BrowserPool(launcher);
+  constructor(opts: PuppeteerTabPoolOptions) {
+    this.renderPool = opts.renderPool;
+    this.sessionPool = opts.sessionPool;
   }
 
   private shell(): Promise<ShellServer> {
@@ -24,10 +31,19 @@ export class PuppeteerTabPool implements TabPool {
     return this.shellPromise;
   }
 
-  private async openShellPage(): Promise<PageLike> {
+  private async openSessionShellPage(): Promise<PageLike> {
     const [shell, page] = await Promise.all([
       this.shell(),
-      this.browser.openPage(),
+      this.sessionPool.openPage(),
+    ]);
+    await page.goto(shell.url, { waitUntil: "domcontentloaded" });
+    return page;
+  }
+
+  private async openRenderShellPage(): Promise<PageLike> {
+    const [shell, page] = await Promise.all([
+      this.shell(),
+      this.renderPool.openPage(),
     ]);
     await page.goto(shell.url, { waitUntil: "domcontentloaded" });
     return page;
@@ -38,7 +54,7 @@ export class PuppeteerTabPool implements TabPool {
       const p = (async () => {
         const [shell, page] = await Promise.all([
           this.shell(),
-          this.browser.openPage(),
+          this.renderPool.openPage(),
         ]);
         await page.goto(shell.renderUrl, { waitUntil: "domcontentloaded" });
         return page;
@@ -52,7 +68,7 @@ export class PuppeteerTabPool implements TabPool {
   }
 
   async openTab(): Promise<TabHandle> {
-    const page = await this.openShellPage();
+    const page = await this.openSessionShellPage();
     const driver: MakeCodeDriver = new PuppeteerDriver(page);
     return {
       driver,
@@ -63,7 +79,7 @@ export class PuppeteerTabPool implements TabPool {
   async withTransientTab<T>(
     fn: (driver: MakeCodeDriver) => Promise<T>,
   ): Promise<T> {
-    const page = await this.openShellPage();
+    const page = await this.openRenderShellPage();
     try {
       return await fn(new PuppeteerDriver(page));
     } finally {
@@ -90,7 +106,8 @@ export class PuppeteerTabPool implements TabPool {
     this.shellPromise = null;
     this.renderPagePromise = null;
     if (renderPage) await renderPage.then((p) => p.close()).catch(() => {});
-    await this.browser.dispose();
+    await this.renderPool.dispose();
+    await this.sessionPool.dispose();
     if (shell) await (await shell).close().catch(() => {});
   }
 }
