@@ -6,7 +6,7 @@ import { createLogger, isLoggingEnabled, setLoggingEnabled } from "makecode-mcp/
 import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
-import { loadWebLLM, isWebGPUSupported, MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+import { loadWebLLM, isWebGPUSupported, LoadCancelledError, MODELS, MODEL_ID, type LoadHandle, type LoadState, type ModelId } from "./chat/webllm-engine.js";
 import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor, type ChatVariant } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 
@@ -73,6 +73,7 @@ export function App(props: {
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const completionRef = useRef<ChatCompletionFn | null>(props.mockCompletion ?? null);
+  const loadHandleRef = useRef<LoadHandle | null>(null);
   const executorRef = useRef<BrowserExecutor | null>(null);
   const [executorReady, setExecutorReady] = useState(false);
 
@@ -91,23 +92,45 @@ export function App(props: {
   const loadModel = useCallback(async (modelId: ModelId) => {
     if (props.mockCompletion) return;
     log.info("loadModel requested", { modelId });
+    // Cancel any prior in-flight load — switching model mid-download must
+    // abort the previous one or two concurrent reloads race the engine.
+    loadHandleRef.current?.cancel();
     setLoadState({ status: "loading", progress: 0, text: "Starting…", modelId });
+    const handle = loadWebLLM(
+      (r) => setLoadState({ status: "loading", progress: r.progress ?? 0, text: r.text, modelId }),
+      modelId,
+    );
+    loadHandleRef.current = handle;
     try {
-      completionRef.current = await loadWebLLM(
-        (r) => setLoadState({ status: "loading", progress: r.progress ?? 0, text: r.text, modelId }),
-        modelId,
-      );
+      completionRef.current = await handle.promise;
+      if (loadHandleRef.current !== handle) return; // superseded by another load
+      loadHandleRef.current = null;
       setLoadedModelId(modelId);
       setChatEpoch((n) => n + 1);
       setLoadState({ status: "ready" });
       log.info("model ready → chat thread remounted (new epoch)", { modelId });
     } catch (err) {
+      if (loadHandleRef.current === handle) loadHandleRef.current = null;
+      if (err instanceof LoadCancelledError) {
+        log.info("model load cancelled by user", { modelId });
+        completionRef.current = null;
+        setLoadedModelId(null);
+        setLoadState({ status: "idle" });
+        return;
+      }
       log.error("model load failed", err);
       completionRef.current = null;
       setLoadedModelId(null);
       setLoadState({ status: "error", error: err instanceof Error ? err : new Error(String(err)) });
     }
   }, [props.mockCompletion]);
+
+  const cancelLoad = useCallback(() => {
+    const handle = loadHandleRef.current;
+    if (!handle) return;
+    log.info("user: cancel model load");
+    handle.cancel();
+  }, []);
 
   const ensureLoaded = useCallback(async () => {
     if (completionRef.current && loadedModelId === selectedModelId) return;
@@ -252,7 +275,11 @@ export function App(props: {
             {!modelLoaded && loadState.status !== "loading" && loadState.status !== "unsupported" && loadState.status !== "error" && (
               <ModelNotLoadedOverlay />
             )}
-            <LoadOverlay state={loadState} onRetry={() => loadModel(selectedModelId)} />
+            <LoadOverlay
+              state={loadState}
+              onRetry={() => loadModel(selectedModelId)}
+              onCancel={cancelLoad}
+            />
           </div>
           {settingsOpen && (
             <SettingsPanel
@@ -309,7 +336,15 @@ function SettingsIcon() {
   );
 }
 
-function LoadOverlay({ state, onRetry }: { state: LoadState; onRetry: () => void }) {
+function LoadOverlay({
+  state,
+  onRetry,
+  onCancel,
+}: {
+  state: LoadState;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
   if (state.status === "idle" || state.status === "ready") return null;
   if (state.status === "unsupported") {
     return (
@@ -340,6 +375,14 @@ function LoadOverlay({ state, onRetry }: { state: LoadState; onRetry: () => void
         <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
       </div>
       <p style={{ fontSize: "0.75rem" }}>{state.text}</p>
+      <button
+        type="button"
+        className="load-cancel-btn"
+        onClick={onCancel}
+        data-testid="load-cancel"
+      >
+        Cancel
+      </button>
     </div>
   );
 }

@@ -184,30 +184,78 @@ async function* parseToolCallStream(
   };
 }
 
-export async function loadWebLLM(
+/** Thrown by {@link loadWebLLM} when {@link LoadHandle.cancel} is invoked
+ *  before the engine finishes initialising. Callers should treat this as a
+ *  silent abort, not an error to display. */
+export class LoadCancelledError extends Error {
+  constructor() {
+    super("Model load cancelled by user.");
+    this.name = "LoadCancelledError";
+  }
+}
+
+/** Handle returned by {@link loadWebLLM} so the caller can cancel an
+ *  in-flight load. `cancel()` aborts the model fetch via `engine.unload()` and
+ *  causes `promise` to reject with {@link LoadCancelledError}. */
+export type LoadHandle = {
+  promise: Promise<ChatCompletionFn>;
+  cancel: () => void;
+};
+
+export function loadWebLLM(
   onProgress: (r: InitProgressReport) => void,
   modelId: string = MODEL_ID,
-): Promise<ChatCompletionFn> {
-  if (!isWebGPUSupported()) {
-    log.error("WebGPU unavailable — refusing to load model");
-    throw new Error("WebGPU is not available in this browser. Chrome 113+ is required.");
-  }
-  log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
-  const webllm = await import("@mlc-ai/web-llm");
-  const endLoad = log.time("CreateMLCEngine (first run downloads weights)");
-  const engine = await webllm.CreateMLCEngine(modelId, {
-    initProgressCallback: (r) => {
-      // Keep this quiet — progress fires frequently. Log major waypoints only.
-      if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
-        log.info("load progress", { progress: r.progress, text: r.text });
-      }
-      onProgress(r);
-    },
-  });
-  endLoad();
-  log.info("engine ready", { modelId });
+): LoadHandle {
+  let cancelFn: () => void = () => {
+    // No-op until the engine is constructed; the `cancelled` flag below makes
+    // the promise reject anyway so early cancels are honoured.
+  };
+  let cancelled = false;
+  const promise = (async (): Promise<ChatCompletionFn> => {
+    if (!isWebGPUSupported()) {
+      log.error("WebGPU unavailable — refusing to load model");
+      throw new Error("WebGPU is not available in this browser. Chrome 113+ is required.");
+    }
+    log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
+    const webllm = await import("@mlc-ai/web-llm");
+    if (cancelled) throw new LoadCancelledError();
+    const engine = new webllm.MLCEngine({
+      initProgressCallback: (r) => {
+        // WebLLM's abort signal only catches the cache/network fetches inside
+        // reload — WASM instantiation, GPU detect, tokenizer load, and shader
+        // pipeline compilation ignore it. On cache hits those steps dominate
+        // wall time, so engine.unload() alone leaves the UI stuck for many
+        // seconds before cancellation appears to take effect. Throwing from
+        // the progress callback short-circuits the load at the very next
+        // progress tick (both fetches and shader compilation emit progress).
+        if (cancelled) throw new LoadCancelledError();
+        if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
+          log.info("load progress", { progress: r.progress, text: r.text });
+        }
+        onProgress(r);
+      },
+    });
+    // Belt-and-braces: also abort the reloadController for the network/cache
+    // fetches that *do* check the signal — that path doesn't fire a progress
+    // tick on its own, so the callback-throw alone wouldn't catch a stall
+    // inside `fetchTensorCache` waiting on a slow disk read.
+    cancelFn = () => {
+      log.info("loadWebLLM: cancel requested → engine.unload()");
+      engine.unload().catch((err) => log.warn("engine.unload() during cancel rejected", err));
+    };
+    const endLoad = log.time("MLCEngine.reload (first run downloads weights)");
+    try {
+      await engine.reload(modelId);
+    } catch (err) {
+      if (cancelled) throw new LoadCancelledError();
+      throw err;
+    } finally {
+      endLoad();
+    }
+    if (cancelled) throw new LoadCancelledError();
+    log.info("engine ready", { modelId });
 
-  return async ({ messages, tools, signal: _signal, options }) => {
+    return async ({ messages, tools, signal: _signal, options }) => {
     const hasTools = tools.length > 0;
     const samplingOpts: Record<string, unknown> = {};
     if (typeof options?.temperature === "number") samplingOpts.temperature = options.temperature;
@@ -255,6 +303,15 @@ export async function loadWebLLM(
       stream: true,
       ...samplingOpts,
     });
-    return parseToolCallStream(stream as any);
+      return parseToolCallStream(stream as any);
+    };
+  })();
+  return {
+    promise,
+    cancel: () => {
+      if (cancelled) return;
+      cancelled = true;
+      cancelFn();
+    },
   };
 }

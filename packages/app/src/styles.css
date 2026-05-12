@@ -560,6 +560,21 @@ body {
 .progress-bar { width: 260px; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--accent); transition: width 150ms ease-out; }
 .loading-overlay-error { color: #991b1b; }
+.load-cancel-btn {
+  margin-top: 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 1rem;
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #374151;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.load-cancel-btn:hover { background: #f3f4f6; border-color: #9ca3af; }
+.load-cancel-btn:active { transform: scale(0.97); }
 
 .model-gate-overlay {
   position: absolute;
