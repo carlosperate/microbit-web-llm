@@ -144,6 +144,47 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(sessionPool.openPage).not.toHaveBeenCalled();
   });
 
+  it("prewarmRender opens the render page in the render pool eagerly", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    pool.prewarmRender();
+    // Allow the microtask that triggers openPage to run.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(renderPool.openPage).toHaveBeenCalledOnce();
+    expect(sessionPool.openPage).not.toHaveBeenCalled();
+    expect(sessionPool.openWindow).not.toHaveBeenCalled();
+  });
+
+  it("prewarmRender is idempotent — repeated calls reuse the same render page", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    pool.prewarmRender();
+    pool.prewarmRender();
+    await pool.renderBlocksImage("code");
+
+    expect(renderPool.openPage).toHaveBeenCalledOnce();
+  });
+
+  it("prewarmRender failures do not propagate and a later call retries", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    renderPool.openPage.mockRejectedValueOnce(new Error("boom"));
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    expect(() => pool.prewarmRender()).not.toThrow();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // After the prewarm error is observed, a later renderBlocksImage call
+    // should re-open the page rather than reuse the rejected promise.
+    await pool.renderBlocksImage("code");
+    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
+  });
+
   it("renderBlocksImage uses the render pool, not the session pool", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();

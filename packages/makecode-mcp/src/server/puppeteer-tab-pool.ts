@@ -77,6 +77,19 @@ export class PuppeteerTabPool implements TabPool {
     return this.renderPagePromise;
   }
 
+  /**
+   * Kick off render-tab loading without awaiting it. Used at MCP server
+   * startup so the makecode-embed renderer iframe (which has a hardcoded
+   * 30s `renderready` timeout) has the maximum possible time to load on
+   * slow connections before the first `get_blocks_image_from_code` call.
+   */
+  prewarmRender(): void {
+    this.renderPage().catch(() => {
+      // Swallow — next call to renderPage() will see the cleared promise
+      // and retry.
+    });
+  }
+
   async openTab(opts?: OpenTabOptions): Promise<TabHandle> {
     const page = await this.openSessionShellPage(opts);
     const endReady = log.time("session tab: MakeCode editor ready");

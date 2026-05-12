@@ -127,6 +127,23 @@ describe("MakeCodeFrameDriverAdapter", () => {
     expect(out).toBe("");
   });
 
+  it("renderBlocksImage forwards the optional scale to svgToPngBase64", async () => {
+    const { svgToPngBase64 } = await import("../../src/shared/svg-to-png.ts");
+    await adapter.renderBlocksImage("basic.showNumber(1)", 1);
+    expect(svgToPngBase64).toHaveBeenLastCalledWith(
+      '<svg width="40" height="20">basic.showNumber(1)</svg>',
+      1,
+    );
+  });
+
+  it("renderBlocksImage without scale defaults to undefined so svgToPngBase64 uses its own default", async () => {
+    const { svgToPngBase64 } = await import("../../src/shared/svg-to-png.ts");
+    await adapter.renderBlocksImage("basic.showNumber(2)");
+    expect(svgToPngBase64).toHaveBeenLastCalledWith(
+      '<svg width="40" height="20">basic.showNumber(2)</svg>',
+    );
+  });
+
   it("concurrent getProject calls both resolve from a single saveProject call", async () => {
     // Neither call has a cache — both must wait for the save event.
     const p1 = adapter.getProject();

@@ -139,10 +139,10 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     }
   }
 
-  async renderBlocksImage(code: string): Promise<string> {
+  async renderBlocksImage(code: string, scale?: number): Promise<string> {
     const result = await this.getRenderer().renderBlocks({ code });
     const svg = result.svg ?? "";
     if (!svg) return "";
-    return svgToPngBase64(svg);
+    return scale === undefined ? svgToPngBase64(svg) : svgToPngBase64(svg, scale);
   }
 }

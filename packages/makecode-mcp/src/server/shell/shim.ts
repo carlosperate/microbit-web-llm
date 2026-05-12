@@ -95,6 +95,8 @@ window.__mkcp = {
   },
   async renderBlocksImage(code) {
     const adapter = await ensureAdapter();
-    return adapter.renderBlocksImage(code);
+    // scale=1 (vs the browser-target default of 2) — the MCP transport sends
+    // the PNG as base64 to the LLM, where a 2× retina image is wasted bytes.
+    return adapter.renderBlocksImage(code, 1);
   },
 };
