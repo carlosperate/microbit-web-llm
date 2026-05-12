@@ -98,4 +98,31 @@ describe("BrowserPool", () => {
     await pool.dispose();
     expect(launcher).not.toHaveBeenCalled();
   });
+
+  it("reuses an initial about:blank page on the first openPage (no extra tab)", async () => {
+    const initial: PageLike & {
+      close: MockedFunction<() => Promise<void>>;
+      url: MockedFunction<() => string>;
+    } = {
+      close: vi.fn(async () => {}),
+      goto: vi.fn(async () => {}),
+      evaluate: vi.fn(async () => undefined as unknown),
+      url: vi.fn(() => "about:blank"),
+    } as never;
+    const newPage = vi.fn(async () => makePageDouble());
+    const browser: BrowserLike = {
+      isConnected: () => true,
+      close: async () => {},
+      newPage,
+      pages: vi.fn(async () => [initial]),
+    } as never;
+    const pool = new BrowserPool(async () => browser);
+
+    const first = await pool.openPage();
+    const second = await pool.openPage();
+
+    expect(first).toBe(initial);
+    expect(newPage).toHaveBeenCalledOnce();
+    expect(second).not.toBe(initial);
+  });
 });

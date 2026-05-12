@@ -1,23 +1,30 @@
+import { createLogger } from "../shared/logger.js";
 import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
 import { startShellServer, type ShellServer } from "./shell/shell-server.js";
 import type { TabHandle, TabPool } from "./tab-pool.js";
 
+const log = createLogger("puppeteer-tab-pool");
+
 export interface PuppeteerTabPoolOptions {
   renderPool: BrowserPoolLike;
   sessionPool: BrowserPoolLike;
+  headed?: boolean;
 }
 
 export class PuppeteerTabPool implements TabPool {
   private readonly renderPool: BrowserPoolLike;
   private readonly sessionPool: BrowserPoolLike;
+  private readonly headed: boolean;
+  private headedLogged = false;
   private shellPromise: Promise<ShellServer> | null = null;
   private renderPagePromise: Promise<PageLike> | null = null;
 
   constructor(opts: PuppeteerTabPoolOptions) {
     this.renderPool = opts.renderPool;
     this.sessionPool = opts.sessionPool;
+    this.headed = opts.headed ?? false;
   }
 
   private shell(): Promise<ShellServer> {
@@ -32,6 +39,10 @@ export class PuppeteerTabPool implements TabPool {
   }
 
   private async openSessionShellPage(): Promise<PageLike> {
+    if (this.headed && !this.headedLogged) {
+      this.headedLogged = true;
+      log.info("session pool: headed mode");
+    }
     const [shell, page] = await Promise.all([
       this.shell(),
       this.sessionPool.openPage(),

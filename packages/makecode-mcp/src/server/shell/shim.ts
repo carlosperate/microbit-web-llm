@@ -54,6 +54,11 @@ function ensureAdapter(): Promise<MakeCodeFrameDriverAdapter> {
   return adapterInit;
 }
 
+// Eagerly initialize the adapter so the MakeCode editor begins loading as soon
+// as the shell page opens (especially visible in headed mode — without this the
+// session tab shows a blank iframe until the first tool call).
+ensureAdapter().catch(() => {});
+
 window.__mkcp = {
   async importProject(text) {
     const adapter = await ensureAdapter();
