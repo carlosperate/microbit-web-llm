@@ -6,6 +6,7 @@ import { MakeCodeFrameDriverAdapter } from "../../browser/frame-driver-adapter.j
 import { fillProjectDefaults } from "../../shared/project-defaults.js";
 
 interface ShimApi {
+  ready(): Promise<void>;
   importProject(text: Record<string, string>): Promise<void>;
   saveProject(): Promise<{ text: Record<string, string> }>;
   compile(): Promise<{ name: string; hex: string }>;
@@ -77,6 +78,9 @@ function ensureAdapter(): Promise<MakeCodeFrameDriverAdapter> {
 ensureAdapter().catch(() => {});
 
 window.__mkcp = {
+  async ready() {
+    await ensureAdapter();
+  },
   async importProject(text) {
     const adapter = await ensureAdapter();
     await adapter.setProject({ text });

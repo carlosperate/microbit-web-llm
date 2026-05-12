@@ -67,6 +67,40 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(renderPool.openPage).not.toHaveBeenCalled();
   });
 
+  it("openTab waits for the MakeCode editor to become ready before resolving", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    let resolveReady!: () => void;
+    const readyPromise = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    sessionPool.openWindow.mockImplementationOnce(async (_url: string) => {
+      const p = makePage();
+      (p.evaluate as MockedFunction<() => Promise<unknown>>).mockImplementation(
+        () => readyPromise as unknown as Promise<unknown>,
+      );
+      sessionPool.pages.push(p);
+      return p;
+    });
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    let resolved = false;
+    const openP = pool.openTab().then((h) => {
+      resolved = true;
+      return h;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(resolved).toBe(false);
+    resolveReady();
+    await openP;
+    expect(resolved).toBe(true);
+    // The ready check should have been evaluated against window.__mkcp.ready().
+    const page = sessionPool.pages[0];
+    expect(page.evaluate).toHaveBeenCalled();
+    const firstArg = (page.evaluate as MockedFunction<(...a: unknown[]) => Promise<unknown>>).mock.calls[0][0];
+    expect(String(firstArg)).toContain("__mkcp.ready");
+  });
+
   it("openTab appends session and label to the shell URL", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();

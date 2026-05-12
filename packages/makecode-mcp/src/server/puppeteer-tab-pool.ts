@@ -79,6 +79,12 @@ export class PuppeteerTabPool implements TabPool {
 
   async openTab(opts?: OpenTabOptions): Promise<TabHandle> {
     const page = await this.openSessionShellPage(opts);
+    const endReady = log.time("session tab: MakeCode editor ready");
+    try {
+      await page.evaluate(`window.__mkcp.ready()`);
+    } finally {
+      endReady();
+    }
     const driver: MakeCodeDriver = new PuppeteerDriver(page);
     return {
       driver,
