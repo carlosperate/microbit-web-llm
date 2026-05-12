@@ -18,6 +18,23 @@ declare global {
   }
 }
 
+// Set a meaningful OS window title from the URL params the server attaches
+// when opening the session window. Chromium uses document.title as the
+// window/taskbar title in headed mode.
+(() => {
+  const params = new URLSearchParams(location.search);
+  const session = params.get("session") ?? "";
+  const label = params.get("label") ?? "";
+  const shortId = session ? session.slice(0, 8) : "";
+  if (label && shortId) {
+    document.title = `MakeCode — ${label} (${shortId})`;
+  } else if (label) {
+    document.title = `MakeCode — ${label}`;
+  } else if (shortId) {
+    document.title = `MakeCode (${shortId})`;
+  }
+})();
+
 let adapterInit: Promise<MakeCodeFrameDriverAdapter> | null = null;
 
 function ensureAdapter(): Promise<MakeCodeFrameDriverAdapter> {

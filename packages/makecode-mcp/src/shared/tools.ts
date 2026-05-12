@@ -133,7 +133,14 @@ export const serverToolMeta = {
   start_session: {
     description:
       "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_image, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
-    inputShape: {},
+    inputShape: {
+      label: z
+        .string()
+        .optional()
+        .describe(
+          "Optional human label shown in the OS window title when the server runs in headed mode; ignored otherwise.",
+        ),
+    },
   },
   end_session: {
     description:

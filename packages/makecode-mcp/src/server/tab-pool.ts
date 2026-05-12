@@ -5,8 +5,15 @@ export interface TabHandle {
   close(): Promise<void>;
 }
 
+export interface OpenTabOptions {
+  /** Session id assigned by the caller; embedded in the shell URL. */
+  sessionId?: string;
+  /** Optional human label embedded in the shell URL for the window title. */
+  label?: string;
+}
+
 export interface TabPool {
-  openTab(): Promise<TabHandle>;
+  openTab(opts?: OpenTabOptions): Promise<TabHandle>;
   withTransientTab<T>(fn: (driver: MakeCodeDriver) => Promise<T>): Promise<T>;
   /**
    * Render-only path for stateless block image rendering. Backed by a

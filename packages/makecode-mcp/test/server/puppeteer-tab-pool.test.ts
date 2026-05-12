@@ -33,12 +33,18 @@ function makePage(): PageLike & {
 
 function makePoolDouble(): BrowserPoolLike & {
   openPage: MockedFunction<() => Promise<PageLike>>;
+  openWindow: MockedFunction<(url: string) => Promise<PageLike>>;
   dispose: MockedFunction<() => Promise<void>>;
   pages: ReturnType<typeof makePage>[];
 } {
   const pages: ReturnType<typeof makePage>[] = [];
   return {
     openPage: vi.fn(async () => {
+      const p = makePage();
+      pages.push(p);
+      return p;
+    }),
+    openWindow: vi.fn(async (_url: string) => {
       const p = makePage();
       pages.push(p);
       return p;
@@ -56,8 +62,52 @@ describe("PuppeteerTabPool — two-pool routing", () => {
 
     await pool.openTab();
 
-    expect(sessionPool.openPage).toHaveBeenCalledOnce();
+    expect(sessionPool.openWindow).toHaveBeenCalledOnce();
+    expect(renderPool.openWindow).not.toHaveBeenCalled();
     expect(renderPool.openPage).not.toHaveBeenCalled();
+  });
+
+  it("openTab appends session and label to the shell URL", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    await pool.openTab({ sessionId: "abc-123", label: "first session" });
+
+    expect(sessionPool.openWindow).toHaveBeenCalledOnce();
+    const url = new URL(sessionPool.openWindow.mock.calls[0][0]);
+    expect(url.pathname).toMatch(/shell\.html$/);
+    expect(url.searchParams.get("session")).toBe("abc-123");
+    expect(url.searchParams.get("label")).toBe("first session");
+  });
+
+  it("openTab omits the label param when no label is given", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    await pool.openTab({ sessionId: "abc-123" });
+
+    const url = new URL(sessionPool.openWindow.mock.calls[0][0]);
+    expect(url.searchParams.get("session")).toBe("abc-123");
+    expect(url.searchParams.has("label")).toBe(false);
+  });
+
+  it("openTab creates each session in its own window via openWindow(url)", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    await pool.openTab();
+    await pool.openTab();
+
+    expect(sessionPool.openWindow).toHaveBeenCalledTimes(2);
+    // Both calls receive the shell URL
+    const urls = sessionPool.openWindow.mock.calls.map((c) => c[0]);
+    expect(urls.every((u) => typeof u === "string" && u.includes("shell"))).toBe(
+      true,
+    );
+    expect(sessionPool.openPage).not.toHaveBeenCalled();
   });
 
   it("renderBlocksImage uses the render pool, not the session pool", async () => {

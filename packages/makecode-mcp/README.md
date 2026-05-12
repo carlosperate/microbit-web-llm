@@ -80,6 +80,25 @@ npm run dev:test-mcp -w makecode-mcp
 
 That builds the package and launches the [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspector) wired to the stdio server.
 
+### Headed mode (watch the editor live)
+
+By default the server runs Chromium headless. Pass `--headed` (or set `MKCP_HEADED=1`) at launch and every `start_session` opens the MakeCode editor in its own OS window so you can watch the LLM drive it:
+
+```bash
+node dist/server/bin.js --headed
+# or
+MKCP_HEADED=1 node dist/server/bin.js
+```
+
+Notes:
+
+- Headed mode is a launch-time choice — Chromium can't be toggled mid-process, so the flag fixes visibility for the whole server lifetime.
+- Each `start_session` creates a separate OS window (via CDP `Target.createTarget({ newWindow: true })`), not just another tab in the same window.
+- `start_session` accepts an optional `label` string; in headed mode it becomes part of the window title (`MakeCode — <label> (<short-session-id>)`) so multiple concurrent sessions are easy to tell apart in the OS taskbar / Cmd-Tab. The label is ignored when headless.
+- The persistent render tab used by the stateless `get_blocks_image_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag — snippet previews never pop windows.
+
+### Server layering
+
 Internally the server layers as:
 
 ```
@@ -88,12 +107,13 @@ bin.ts (CLI)
         └── TabExecutor (implements ServerExecutor)
               └── TabPool
                     └── PuppeteerTabPool
-                          ├── BrowserPool        (one Puppeteer process, reused)
-                          ├── PuppeteerDriver    (page.evaluate → window.__mkcp)
-                          └── startShellServer() (serves shell.html + bundled shim)
+                          ├── renderPool: BrowserPool    (always headless — render & hex tabs)
+                          ├── sessionPool: BrowserPool   (headless or headed per --headed)
+                          ├── PuppeteerDriver            (page.evaluate → window.__mkcp)
+                          └── startShellServer()         (serves shell.html + bundled shim)
 ```
 
-Each `start_session` allocates a Puppeteer tab loading a local shell page; `end_session` closes the tab. The browser process itself stays alive between sessions. See [src/server/](src/server/).
+Each `start_session` allocates a Puppeteer tab (in headed mode: its own OS window) loading a local shell page; `end_session` closes the tab. Both browser processes stay alive between sessions. See [src/server/](src/server/).
 
 ## Configuring MCP clients
 

@@ -61,7 +61,7 @@ The tool schemas in [`packages/makecode-mcp/src/shared/tools.ts`](packages/makec
 
 ## Using the MCP server with external clients
 
-The `makecode-mcp` package can be wired into Claude Desktop, GitHub Copilot (VS Code), and LM Studio as a stdio MCP server. See the [package README](packages/makecode-mcp/README.md#configuring-mcp-clients) for per-client configuration snippets.
+The `makecode-mcp` package can be wired into Claude Desktop, GitHub Copilot (VS Code), and LM Studio as a stdio MCP server. See the [package README](packages/makecode-mcp/README.md#configuring-mcp-clients) for per-client configuration snippets. Pass `--headed` (or set `MKCP_HEADED=1`) when launching the binary to watch the editor live — see [Headed mode](packages/makecode-mcp/README.md#headed-mode-watch-the-editor-live).
 
 ## License
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   BlocksImage,
   ServerExecutor,
+  StartSessionOptions,
   StartSessionResult,
 } from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
@@ -22,12 +23,17 @@ export class TabExecutor implements ServerExecutor {
 
   constructor(private readonly pool: TabPool) {}
 
-  async startSession(): Promise<StartSessionResult> {
-    const tab = await this.pool.openTab();
+  async startSession(opts?: StartSessionOptions): Promise<StartSessionResult> {
     const session_id = randomUUID();
+    const tab = await this.pool.openTab(
+      opts?.label !== undefined
+        ? { sessionId: session_id, label: opts.label }
+        : { sessionId: session_id },
+    );
     this.sessions.set(session_id, tab);
     log.info("startSession → new tab", {
       session_id,
+      label: opts?.label,
       openSessions: this.sessions.size,
     });
     return { session_id };

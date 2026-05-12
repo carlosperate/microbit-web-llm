@@ -3,7 +3,7 @@ import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
 import { startShellServer, type ShellServer } from "./shell/shell-server.js";
-import type { TabHandle, TabPool } from "./tab-pool.js";
+import type { OpenTabOptions, TabHandle, TabPool } from "./tab-pool.js";
 
 const log = createLogger("puppeteer-tab-pool");
 
@@ -38,17 +38,16 @@ export class PuppeteerTabPool implements TabPool {
     return this.shellPromise;
   }
 
-  private async openSessionShellPage(): Promise<PageLike> {
+  private async openSessionShellPage(opts?: OpenTabOptions): Promise<PageLike> {
     if (this.headed && !this.headedLogged) {
       this.headedLogged = true;
       log.info("session pool: headed mode");
     }
-    const [shell, page] = await Promise.all([
-      this.shell(),
-      this.sessionPool.openPage(),
-    ]);
-    await page.goto(shell.url, { waitUntil: "domcontentloaded" });
-    return page;
+    const shell = await this.shell();
+    const url = new URL(shell.url);
+    if (opts?.sessionId) url.searchParams.set("session", opts.sessionId);
+    if (opts?.label !== undefined) url.searchParams.set("label", opts.label);
+    return this.sessionPool.openWindow(url.toString());
   }
 
   private async openRenderShellPage(): Promise<PageLike> {
@@ -78,8 +77,8 @@ export class PuppeteerTabPool implements TabPool {
     return this.renderPagePromise;
   }
 
-  async openTab(): Promise<TabHandle> {
-    const page = await this.openSessionShellPage();
+  async openTab(opts?: OpenTabOptions): Promise<TabHandle> {
+    const page = await this.openSessionShellPage(opts);
     const driver: MakeCodeDriver = new PuppeteerDriver(page);
     return {
       driver,

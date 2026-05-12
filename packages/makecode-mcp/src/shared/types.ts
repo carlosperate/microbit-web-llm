@@ -33,8 +33,13 @@ export interface BrowserExecutor {
 
 // Server target: one MCP server can multiplex many LLM clients, so sessions
 // are first-class. Each session maps to a puppeteer tab.
+export interface StartSessionOptions {
+  /** Human label shown in the OS window title when the server runs headed. */
+  label?: string;
+}
+
 export interface ServerExecutor {
-  startSession(): Promise<StartSessionResult>;
+  startSession(opts?: StartSessionOptions): Promise<StartSessionResult>;
   endSession(sessionId: string): Promise<void>;
   getCurrentCode(sessionId: string): Promise<string>;
   setCode(sessionId: string, code: string): Promise<void>;

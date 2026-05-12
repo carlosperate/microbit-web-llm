@@ -10,12 +10,14 @@ export interface BrowserLike {
   close(): Promise<void>;
   newPage(): Promise<PageLike>;
   pages?(): Promise<PageLike[]>;
+  openWindow?(url: string): Promise<PageLike>;
 }
 
 export type BrowserLauncher = () => Promise<BrowserLike>;
 
 export interface BrowserPoolLike {
   openPage(): Promise<PageLike>;
+  openWindow(url: string): Promise<PageLike>;
   dispose(): Promise<void>;
 }
 
@@ -61,6 +63,33 @@ export class BrowserPool implements BrowserPoolLike {
       this.firstOpenDone = true;
     }
     return browser.newPage();
+  }
+
+  async openWindow(url: string): Promise<PageLike> {
+    const browser = await this.ensureBrowser();
+    if (browser.openWindow) {
+      const page = await browser.openWindow(url);
+      // After the new window exists, retire any leftover startup about:blank
+      // pages so the user doesn't see a stray blank window next to sessions.
+      if (!this.firstOpenDone && browser.pages) {
+        this.firstOpenDone = true;
+        const existing = await browser.pages();
+        for (const p of existing) {
+          if (p === page) continue;
+          const u = p.url?.();
+          if (u === "about:blank" || u === "") {
+            await p.close().catch(() => {});
+          }
+        }
+      } else {
+        this.firstOpenDone = true;
+      }
+      return page;
+    }
+    // Fallback: no native new-window support — open a tab and navigate.
+    const page = await this.openPage();
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    return page;
   }
 
   async withTab<T>(fn: (page: PageLike) => Promise<T>): Promise<T> {

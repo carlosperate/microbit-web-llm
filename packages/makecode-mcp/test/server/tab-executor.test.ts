@@ -65,6 +65,20 @@ describe("TabExecutor — session lifecycle", () => {
     expect(handles).toHaveLength(2);
   });
 
+  it("startSession forwards session_id and label to pool.openTab", async () => {
+    const { pool } = makePool();
+    const exec = new TabExecutor(pool);
+    const { session_id } = await exec.startSession({ label: "demo" });
+    expect(pool.openTab).toHaveBeenCalledWith({ sessionId: session_id, label: "demo" });
+  });
+
+  it("startSession without args still calls pool.openTab with the session_id", async () => {
+    const { pool } = makePool();
+    const exec = new TabExecutor(pool);
+    const { session_id } = await exec.startSession();
+    expect(pool.openTab).toHaveBeenCalledWith({ sessionId: session_id });
+  });
+
   it("endSession closes the tab and invalidates the id", async () => {
     const { pool, handles } = makePool();
     const exec = new TabExecutor(pool);

@@ -128,6 +128,13 @@ describe("serverTools", () => {
     expect(t.function.parameters.required).toEqual([]);
   });
 
+  it("start_session accepts an optional label", () => {
+    const t = serverTools.find((x) => x.function.name === "start_session")!;
+    expect(t.function.parameters.properties).toHaveProperty("label");
+    expect(t.function.parameters.properties.label.type).toBe("string");
+    expect(t.function.parameters.required).not.toContain("label");
+  });
+
   it.each([
     "end_session",
     "get_current_code",

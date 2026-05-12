@@ -57,7 +57,13 @@ export async function startShellServer(): Promise<ShellServer> {
   };
   return await new Promise((res) => {
     const server: Server = createServer((req, reply) => {
-      const route = routes[req.url ?? "/"];
+      // Strip the query string before looking up the route — sessions navigate
+      // to `/shell.html?session=…&label=…` and the params must not affect
+      // which file we serve.
+      const raw = req.url ?? "/";
+      const qIdx = raw.indexOf("?");
+      const pathname = qIdx === -1 ? raw : raw.slice(0, qIdx);
+      const route = routes[pathname];
       if (!route) {
         reply.writeHead(404).end();
         return;

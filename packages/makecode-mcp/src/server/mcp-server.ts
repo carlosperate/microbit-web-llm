@@ -73,7 +73,9 @@ export function buildMcpServer(options: McpServerOptions): McpServer {
       }) as never,
     );
 
-  reg<{}>("start_session", async () => textResult(await exec.startSession()));
+  reg<{ label?: string }>("start_session", async ({ label }) =>
+    textResult(await exec.startSession(label !== undefined ? { label } : undefined)),
+  );
   reg<{ session_id: string }>("end_session", async ({ session_id }) => {
     await exec.endSession(session_id);
     return textResult({ ok: true });
