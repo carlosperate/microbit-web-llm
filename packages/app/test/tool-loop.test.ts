@@ -58,7 +58,7 @@ describe("runToolLoop", () => {
               {
                 index: 0,
                 id: "call-1",
-                function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' },
+                function: { name: "session_set_code", arguments: '{"code":"basic.showNumber(1)"}' },
               },
             ],
           }),
@@ -92,9 +92,9 @@ describe("runToolLoop", () => {
   });
 
   it("executes multiple tool calls in the same turn sequentially in emission order", async () => {
-    // The model frequently emits set_code + get_blocks_image (and sometimes
-    // get_current_code beforehand) in a single batch. Running them in
-    // parallel races: get_blocks_image returns in ~17ms while set_code is
+    // The model frequently emits session_set_code + session_get_blocks_img (and sometimes
+    // session_get_code beforehand) in a single batch. Running them in
+    // parallel races: session_get_blocks_img returns in ~17ms while session_set_code is
     // still in flight (~2s for MakeCode to ingest), so blocks render against
     // the pre-set state and throw EMPTY_EDITOR_ERROR. Serialising preserves
     // the model's intended ordering.
@@ -117,9 +117,9 @@ describe("runToolLoop", () => {
         return asStream([
           chunk({
             tool_calls: [
-              { index: 0, id: "a", function: { name: "get_current_code", arguments: "{}" } },
-              { index: 1, id: "b", function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' } },
-              { index: 2, id: "c", function: { name: "get_blocks_image", arguments: "{}" } },
+              { index: 0, id: "a", function: { name: "session_get_code", arguments: "{}" } },
+              { index: 1, id: "b", function: { name: "session_set_code", arguments: '{"code":"basic.showNumber(1)"}' } },
+              { index: 2, id: "c", function: { name: "session_get_blocks_img", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -142,7 +142,7 @@ describe("runToolLoop", () => {
     expect(getBlocksStartedBeforeSetCode).toBe(false);
   });
 
-  it("passes get_blocks_image_from_code through as a stateless render", async () => {
+  it("passes get_blocks_img_from_code through as a stateless render", async () => {
     // Useful for previewing a snippet while the user is still discussing
     // changes, before anything is loaded into the editor.
     const executor = makeExecutor({
@@ -158,7 +158,7 @@ describe("runToolLoop", () => {
               {
                 index: 0,
                 id: "p1",
-                function: { name: "get_blocks_image_from_code", arguments: '{"code":"basic.showNumber(42)"}' },
+                function: { name: "get_blocks_img_from_code", arguments: '{"code":"basic.showNumber(42)"}' },
               },
             ],
           }),
@@ -184,7 +184,7 @@ describe("runToolLoop", () => {
     const executor = makeExecutor({
       getBlocksImage: vi.fn(async () => {
         throw new Error(
-          "No code loaded in the editor. Call set_code first to load code before requesting get_blocks_image.",
+          "No code loaded in the editor. Call session_set_code first to load code before requesting session_get_blocks_img.",
         );
       }),
     });
@@ -197,7 +197,7 @@ describe("runToolLoop", () => {
         return asStream([
           chunk({
             tool_calls: [
-              { index: 0, id: "c", function: { name: "get_blocks_image", arguments: "{}" } },
+              { index: 0, id: "c", function: { name: "session_get_blocks_img", arguments: "{}" } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -233,7 +233,7 @@ describe("runToolLoop", () => {
         return asStream([
           chunk({
             tool_calls: [
-              { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"x"}' } },
+              { index: 0, id: "c1", function: { name: "session_set_code", arguments: '{"code":"x"}' } },
             ],
           }),
           chunk({}, "tool_calls"),
@@ -250,7 +250,7 @@ describe("runToolLoop", () => {
       tools: [
         {
           type: "function",
-          function: { name: "set_code", description: "x", parameters: { type: "object", properties: {} } },
+          function: { name: "session_set_code", description: "x", parameters: { type: "object", properties: {} } },
         },
       ] as any,
       signal: new AbortController().signal,
@@ -284,7 +284,7 @@ describe("runToolLoop", () => {
           return asStream([
             chunk({
               tool_calls: [
-                { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"basic.showString(\\"Jerry\\")"}' } },
+                { index: 0, id: "c1", function: { name: "session_set_code", arguments: '{"code":"basic.showString(\\"Jerry\\")"}' } },
               ],
             }),
             chunk({}, "tool_calls"),
@@ -300,7 +300,7 @@ describe("runToolLoop", () => {
         tools: [
           {
             type: "function",
-            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+            function: { name: "session_set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
           },
         ] as any,
         signal: new AbortController().signal,
@@ -333,7 +333,7 @@ describe("runToolLoop", () => {
         tools: [
           {
             type: "function",
-            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+            function: { name: "session_set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
           },
         ] as any,
         signal: new AbortController().signal,
@@ -348,7 +348,7 @@ describe("runToolLoop", () => {
     });
 
     it("does not retry the stall if substantive work has already happened", async () => {
-      // Turn 1: set_code (substantive).
+      // Turn 1: session_set_code (substantive).
       // Turn 2: []. No stall retry — proceed to tools-disabled text fallback.
       const executor = makeExecutor();
       let turn = 0;
@@ -360,7 +360,7 @@ describe("runToolLoop", () => {
           return asStream([
             chunk({
               tool_calls: [
-                { index: 0, id: "c1", function: { name: "set_code", arguments: '{"code":"x"}' } },
+                { index: 0, id: "c1", function: { name: "session_set_code", arguments: '{"code":"x"}' } },
               ],
             }),
             chunk({}, "tool_calls"),
@@ -376,7 +376,7 @@ describe("runToolLoop", () => {
         tools: [
           {
             type: "function",
-            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+            function: { name: "session_set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
           },
         ] as any,
         signal: new AbortController().signal,
@@ -410,7 +410,7 @@ describe("runToolLoop", () => {
         tools: [
           {
             type: "function",
-            function: { name: "set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
+            function: { name: "session_set_code", description: "x", parameters: { type: "object", properties: {}, required: [] } },
           },
         ] as any,
         signal: new AbortController().signal,
@@ -455,7 +455,7 @@ describe("runToolLoop", () => {
       asStream([
         chunk({
           tool_calls: [
-            { index: 0, id: `c${i}`, function: { name: "set_code", arguments: `{"code":"v${i++}"}` } },
+            { index: 0, id: `c${i}`, function: { name: "session_set_code", arguments: `{"code":"v${i++}"}` } },
           ],
         }),
         chunk({}, "tool_calls"),
@@ -485,7 +485,7 @@ describe("runToolLoop", () => {
       return asStream([
         chunk({
           tool_calls: [
-            { index: 0, id: "c", function: { name: "get_current_code", arguments: "{}" } },
+            { index: 0, id: "c", function: { name: "session_get_code", arguments: "{}" } },
           ],
         }),
         chunk({}, "tool_calls"),
@@ -496,7 +496,7 @@ describe("runToolLoop", () => {
       completion: engine,
       executor: makeExecutor(),
       messages: [{ role: "user", content: "go" }],
-      tools: [{ name: "get_current_code", description: "", parameters: { type: "object", properties: {} } } as never],
+      tools: [{ name: "session_get_code", description: "", parameters: { type: "object", properties: {} } } as never],
       signal: new AbortController().signal,
       maxSteps: 10,
     })) {
@@ -504,7 +504,7 @@ describe("runToolLoop", () => {
       if (e.type === "tool-call") calls.push(e.name);
     }
     // First call dispatches; second turn detects repeat and skips dispatch.
-    expect(calls).toEqual(["get_current_code"]);
+    expect(calls).toEqual(["session_get_code"]);
     expect(events.filter((e) => e.type === "text-delta").map((e) => (e as { delta: string }).delta).join("")).toBe(
       "Stopped looping.",
     );

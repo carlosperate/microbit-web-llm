@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 
 // The mock script runs in the page context before the app bootstraps.
 // It intercepts all chat completions and replays a scripted transcript:
-//   1st call  → start_session tool call
-//   2nd call  → set_code tool call with a micro:bit program
-//   3rd call  → get_blocks_image tool call
+//   1st call  → session_start tool call
+//   2nd call  → session_set_code tool call with a micro:bit program
+//   3rd call  → session_get_blocks_img tool call
 //   4th call  → final text response
 const INIT_SCRIPT = `
 (() => {
@@ -20,7 +20,7 @@ const INIT_SCRIPT = `
     turn++;
     if (turn === 1) {
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "start_session", arguments: "{}" } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "session_start", arguments: "{}" } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
@@ -34,7 +34,7 @@ const INIT_SCRIPT = `
         return "unknown";
       })();
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c2", type: "function", function: { name: "set_code", arguments: JSON.stringify({ session_id: sid, code: SAMPLE_CODE }) } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c2", type: "function", function: { name: "session_set_code", arguments: JSON.stringify({ session_id: sid, code: SAMPLE_CODE }) } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
@@ -48,7 +48,7 @@ const INIT_SCRIPT = `
         return "unknown";
       })();
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "get_blocks_image", arguments: JSON.stringify({ session_id: sid }) } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "session_get_blocks_img", arguments: JSON.stringify({ session_id: sid }) } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
@@ -60,7 +60,7 @@ const INIT_SCRIPT = `
 })();
 `;
 
-test("full chat → set_code → get_blocks_image flow using mocked WebLLM", async ({ page }) => {
+test("full chat → session_set_code → session_get_blocks_img flow using mocked WebLLM", async ({ page }) => {
   await page.addInitScript(INIT_SCRIPT);
   await page.goto("/");
 
@@ -75,16 +75,16 @@ test("full chat → set_code → get_blocks_image flow using mocked WebLLM", asy
   await composer.press("Enter");
 
   // Expect all four tool calls to appear in the assistant message.
-  await expect(page.locator(".tool-call summary code", { hasText: "start_session" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(".tool-call summary code", { hasText: "set_code" })).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator(".tool-call summary code", { hasText: "get_blocks_image" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".tool-call summary code", { hasText: "session_start" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".tool-call summary code", { hasText: "session_set_code" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".tool-call summary code", { hasText: "session_get_blocks_img" })).toBeVisible({ timeout: 30_000 });
 
   // Final text reply streams in.
   await expect(page.locator(".message-assistant")).toContainText(/scrolls HI/, { timeout: 30_000 });
 
-  // Expand the get_blocks_image call — its result should contain a PNG <img>
+  // Expand the session_get_blocks_img call — its result should contain a PNG <img>
   // (or an error if the renderer wasn't available, e.g. no session in browser).
-  const imgCall = page.locator(".tool-call", { has: page.locator("summary code", { hasText: "get_blocks_image" }) });
+  const imgCall = page.locator(".tool-call", { has: page.locator("summary code", { hasText: "session_get_blocks_img" }) });
   await imgCall.locator("summary").click();
   await expect(imgCall).toContainText(/pngBase64|No code loaded|session_id|data:image\/png/i);
 });

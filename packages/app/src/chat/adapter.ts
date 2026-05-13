@@ -1,6 +1,6 @@
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult } from "@assistant-ui/react";
 import type { ThreadMessage, ThreadAssistantMessagePart } from "@assistant-ui/react";
-import { tools as TOOL_SCHEMAS } from "makecode-mcp/browser";
+import { tools as TOOL_SCHEMAS, IMAGE_TOOL_NAMES } from "makecode-mcp/browser";
 import type { BrowserExecutor } from "makecode-mcp/browser";
 import { createLogger, preview } from "makecode-mcp/browser";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
@@ -178,7 +178,7 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
             // Render a blocks-image tool result inline as an image part so
             // the user sees the rendered blocks alongside the call card.
             // Mirrors what the MCP server emits as `image` content blocks.
-            if (!ev.isError && ev.name.startsWith("get_blocks_image")) {
+            if (!ev.isError && IMAGE_TOOL_NAMES.has(ev.name as never)) {
               const png = pngFromResult(ev.result);
               if (png) parts.push({ type: "image", image: `data:image/png;base64,${png}` });
             }

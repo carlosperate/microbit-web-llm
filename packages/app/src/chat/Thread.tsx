@@ -9,6 +9,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
+import { IMAGE_TOOL_NAMES } from "makecode-mcp/browser";
 
 export function Thread() {
   return (
@@ -138,7 +139,7 @@ function ToolCallView({
   isError?: boolean;
 }) {
   const resultText = result === undefined ? null : typeof result === "string" ? result : JSON.stringify(result);
-  const isImageTool = !isError && toolName.startsWith("get_blocks_image");
+  const isImageTool = !isError && IMAGE_TOOL_NAMES.has(toolName as never);
   const isPending = result === undefined && !isError;
 
   return (

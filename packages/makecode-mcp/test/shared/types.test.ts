@@ -4,10 +4,10 @@ import type { BrowserExecutor, ServerExecutor } from "../../src/shared/types.ts"
 
 describe("SessionError", () => {
   it("is an Error with a machine-readable code", () => {
-    const err = new SessionError("missing", "call start_session first");
+    const err = new SessionError("missing", "call session_start first");
     expect(err).toBeInstanceOf(Error);
     expect(err.code).toBe("missing");
-    expect(err.message).toBe("call start_session first");
+    expect(err.message).toBe("call session_start first");
   });
 
   it("isSessionError narrows unknowns", () => {

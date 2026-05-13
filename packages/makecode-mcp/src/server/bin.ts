@@ -25,7 +25,7 @@ async function main() {
   // Start the render tab loading immediately. The makecode-embed renderer
   // has a 30s `renderready` timeout from `initialize()`; doing this at MCP
   // startup gives slow networks the most time before the first
-  // `get_blocks_image_from_code` call.
+  // `get_blocks_img_from_code` call.
   pool.prewarmRender();
 
   const shutdown = async () => {

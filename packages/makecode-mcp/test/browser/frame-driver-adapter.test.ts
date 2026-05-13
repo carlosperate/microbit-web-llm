@@ -194,7 +194,7 @@ describe("MakeCodeFrameDriverAdapter", () => {
       adapter.setProject({ text: { ...FILES, "main.ts": "this is not valid TS" } }),
     ).rejects.toThrow(/loaded.*compile to blocks.*decompile failed: unsupported syntax/i);
     // The import itself succeeded — the optimistic cache reflects the new code
-    // so a follow-up set_code from the model can replace it.
+    // so a follow-up session_set_code from the model can replace it.
     expect(driver.importProject).toHaveBeenCalledOnce();
   });
 
@@ -202,7 +202,7 @@ describe("MakeCodeFrameDriverAdapter", () => {
     // After setProject, MakeCode may fire follow-up workspacesave events
     // carrying only the fields it just changed (e.g. main.blocks after a
     // view switch). Replacing the cache wholesale would drop the main.ts we
-    // just imported and make the very next get_blocks_image throw
+    // just imported and make the very next session_get_blocks_img throw
     // EMPTY_EDITOR_ERROR even though the editor still has the code.
     await adapter.setProject({ text: { ...FILES, "main.ts": "basic.showNumber(7)" } });
     adapter.handleWorkspaceSave({

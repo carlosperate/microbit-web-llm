@@ -61,7 +61,7 @@ describe("convertMessages", () => {
         {
           type: "tool-call",
           toolCallId: "c1",
-          toolName: "set_code",
+          toolName: "session_set_code",
           args: { code: "x" },
           argsText: '{"code":"x"}',
           result: '{"ok":true}',
@@ -72,7 +72,7 @@ describe("convertMessages", () => {
     expect(out[0]).toMatchObject({
       role: "assistant",
       content: "ok",
-      tool_calls: [{ id: "c1", type: "function", function: { name: "set_code" } }],
+      tool_calls: [{ id: "c1", type: "function", function: { name: "session_set_code" } }],
     });
     expect(out[1]).toEqual({ role: "tool", tool_call_id: "c1", content: '{"ok":true}' });
   });
@@ -129,7 +129,7 @@ describe("createChatAdapter", () => {
       turn++;
       if (turn === 1) {
         return asStream([
-          chunk({ tool_calls: [{ index: 0, id: "t1", function: { name: "set_code", arguments: '{"code":"basic.showNumber(1)"}' } }] }),
+          chunk({ tool_calls: [{ index: 0, id: "t1", function: { name: "session_set_code", arguments: '{"code":"basic.showNumber(1)"}' } }] }),
           chunk({}, "tool_calls"),
         ]);
       }
@@ -141,7 +141,7 @@ describe("createChatAdapter", () => {
     const toolPart = final.content.find((p: any) => p.type === "tool-call");
     expect(toolPart).toMatchObject({
       toolCallId: "t1",
-      toolName: "set_code",
+      toolName: "session_set_code",
       isError: false,
     });
     expect(executor.setCode).toHaveBeenCalledWith("basic.showNumber(1)");

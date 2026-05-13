@@ -1,6 +1,5 @@
-import type { BrowserExecutor } from "makecode-mcp/browser";
-import type { ToolDescriptor } from "makecode-mcp/browser";
-import { createLogger, preview } from "makecode-mcp/browser";
+import type { BrowserExecutor, BrowserToolName, ToolDescriptor } from "makecode-mcp/browser";
+import { TOOL, createLogger, preview } from "makecode-mcp/browser";
 
 const log = createLogger("tool-loop");
 
@@ -91,42 +90,47 @@ function collectToolCalls(
 // user's request. Used by the stall-retry heuristic: if the model emits []
 // before any of these have fired, we nudge it once instead of falling back to
 // a tools-disabled plain-text reply.
-const SUBSTANTIVE_TOOLS = new Set([
-  "set_code",
-  "get_current_code",
-  "get_blocks_image",
-  "get_hex_file",
-  "get_blocks_image_from_code",
+const SUBSTANTIVE_TOOLS: ReadonlySet<string> = new Set<BrowserToolName>([
+  TOOL.SESSION_SET_CODE,
+  TOOL.SESSION_GET_CODE,
+  TOOL.SESSION_GET_BLOCKS_IMG,
+  TOOL.SESSION_GET_HEX_FILE,
+  TOOL.GET_BLOCKS_IMG_FROM_CODE,
 ]);
 
 // Fires once if the model stalls (emits []) before doing any substantive work.
 // Typical failure mode: user asks for a program, model replies in plain text
 // describing the tool calls inside a TypeScript code block instead of
 // actually calling them.
-const STALL_REMINDER =
-  "[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: set_code with the program, then get_blocks_image to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.";
+const STALL_REMINDER = `[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: ${TOOL.SESSION_SET_CODE} with the program, then ${TOOL.SESSION_GET_BLOCKS_IMG} to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.`;
 
 async function dispatchTool(
   executor: BrowserExecutor,
   name: string,
   args: Record<string, unknown>,
 ): Promise<string> {
-  switch (name) {
-    case "get_current_code":
+  switch (name as BrowserToolName) {
+    case TOOL.SESSION_GET_CODE:
       return await executor.getCurrentCode();
-    case "set_code":
+    case TOOL.SESSION_SET_CODE:
       await executor.setCode(args.code as string);
       return JSON.stringify({ ok: true });
-    case "get_blocks_image":
+    case TOOL.SESSION_GET_BLOCKS_IMG:
       return JSON.stringify(await executor.getBlocksImage());
-    case "get_hex_file":
+    case TOOL.SESSION_GET_HEX_FILE:
       return await executor.getHexFile();
-    case "get_blocks_image_from_code":
+    case TOOL.GET_BLOCKS_IMG_FROM_CODE:
       return JSON.stringify(
         await executor.getBlocksImageFromCode(args.code as string),
       );
-    default:
+    default: {
+      // Exhaustiveness check: if a new BrowserToolName is added without a case
+      // above, TS flags this assignment. The runtime throw covers bogus names
+      // the model might emit from outside the allowed set.
+      const _exhaustive: never = name as never;
+      void _exhaustive;
       throw new Error(`Unknown tool: ${name}`);
+    }
   }
 }
 
@@ -175,7 +179,7 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
 
   // Track every (name + args) we've actually dispatched this run. The smaller
   // models in the picker sometimes ignore the system-prompt rule "never call
-  // the same tool twice" and lock into a single-tool loop (e.g. get_current_code
+  // the same tool twice" and lock into a single-tool loop (e.g. session_get_code
   // every step). A deterministic guard here cuts the loop short.
   const seenCalls = new Set<string>();
   const callKey = (c: PendingToolCall) => `${c.name}:${c.arguments || "{}"}`;
@@ -267,8 +271,8 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         type DispatchResult = { call: PendingToolCall; args: Record<string, unknown>; result: string; isError: boolean };
 
         // Run sequentially in the order the model emitted them. The model
-        // frequently batches set_code + get_blocks_image (sometimes preceded
-        // by get_current_code) in one turn, intending strict ordering. Running
+        // frequently batches session_set_code + session_get_blocks_img (sometimes preceded
+        // by session_get_code) in one turn, intending strict ordering. Running
         // them in parallel races: a fast read finishes before the slow
         // setCode commits and the editor still looks empty.
         const results: DispatchResult[] = [];

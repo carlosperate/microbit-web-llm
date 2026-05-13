@@ -7,6 +7,7 @@ import type {
 } from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
 import { fillProjectDefaults } from "../shared/project-defaults.js";
+import { TOOL } from "../shared/tools.js";
 import {
   readCurrentCode,
   renderCurrentBlocks,
@@ -97,14 +98,14 @@ export class TabExecutor implements ServerExecutor {
     if (!sessionId) {
       throw new SessionError(
         "missing",
-        "session_id is required. Call start_session first.",
+        `session_id is required. Call ${TOOL.SESSION_START} first.`,
       );
     }
     const tab = this.sessions.get(sessionId);
     if (!tab) {
       throw new SessionError(
         "unknown",
-        "session_id is unknown. Call start_session to get a new one.",
+        `session_id is unknown. Call ${TOOL.SESSION_START} to get a new one.`,
       );
     }
     return tab;

@@ -16,6 +16,38 @@ export interface ToolDescriptor {
   };
 }
 
+// ─── Tool-name constants ────────────────────────────────────────────────────
+// Single source of truth for every tool identifier. Every consumer (this file
+// included) references these constants instead of repeating the literal —
+// renaming a tool is a one-line change here, and TypeScript narrowing on the
+// `*ToolName` unions catches typos at build time.
+
+export const TOOL = {
+  SESSION_START: "session_start",
+  SESSION_END: "session_end",
+  SESSION_GET_CODE: "session_get_code",
+  SESSION_SET_CODE: "session_set_code",
+  SESSION_GET_BLOCKS_IMG: "session_get_blocks_img",
+  SESSION_GET_HEX_FILE: "session_get_hex_file",
+  GET_BLOCKS_IMG_FROM_CODE: "get_blocks_img_from_code",
+  GET_HEX_FILE_FROM_CODE: "get_hex_file_from_code",
+} as const;
+
+export type ToolName = (typeof TOOL)[keyof typeof TOOL];
+
+// Image-producing tools (PNG base64 result). Consumers that need to render
+// the result inline or stub it in flattened history use this set.
+export const IMAGE_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
+  TOOL.SESSION_GET_BLOCKS_IMG,
+  TOOL.GET_BLOCKS_IMG_FROM_CODE,
+]);
+
+// Hex-producing tools (binary opaque result). Same role as IMAGE_TOOL_NAMES.
+export const HEX_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
+  TOOL.SESSION_GET_HEX_FILE,
+  TOOL.GET_HEX_FILE_FROM_CODE,
+]);
+
 const CODE_PROP = {
   code: {
     type: "string",
@@ -23,25 +55,33 @@ const CODE_PROP = {
   },
 };
 
-const noSessionHint =
-  "If the session_id is missing or unknown, the tool returns an error — call start_session first to get a new one.";
+const noSessionHint = `If the session_id is missing or unknown, the tool returns an error — call ${TOOL.SESSION_START} first to get a new one.`;
 
-const loadedBrowserHint =
-  "The editor must already have code loaded (via set_code) before this call.";
+const loadedBrowserHint = `The editor must already have code loaded (via ${TOOL.SESSION_SET_CODE}) before this call.`;
 
-const loadedServerHint =
-  "The editor must already have code loaded (via set_code) in this session.";
+const loadedServerHint = `The editor must already have code loaded (via ${TOOL.SESSION_SET_CODE}) in this session.`;
 
 // ─── Browser target ─────────────────────────────────────────────────────────
 // One executor per iframe; the iframe *is* the session. No start/end lifecycle,
-// no session_id on any tool. Stateful tools (set_code, get_current_code,
-// get_blocks_image, get_hex_file) act on the iframe's current state directly.
+// no session_id on any tool. Stateful tools (SESSION_SET_CODE, SESSION_GET_CODE,
+// SESSION_GET_BLOCKS_IMG, SESSION_GET_HEX_FILE) act on the iframe's current
+// state directly.
+
+export const BROWSER_TOOL_NAMES = [
+  TOOL.SESSION_GET_CODE,
+  TOOL.SESSION_SET_CODE,
+  TOOL.SESSION_GET_BLOCKS_IMG,
+  TOOL.SESSION_GET_HEX_FILE,
+  TOOL.GET_BLOCKS_IMG_FROM_CODE,
+] as const;
+
+export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
 
 export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_current_code",
+      name: TOOL.SESSION_GET_CODE,
       description:
         "Return the TypeScript source currently loaded in the MakeCode editor.",
       parameters: {
@@ -55,9 +95,8 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "set_code",
-      description:
-        "Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image.",
+      name: TOOL.SESSION_SET_CODE,
+      description: `Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks, or ${TOOL.SESSION_GET_HEX_FILE} to produce a downloadable firmware image.`,
       parameters: {
         type: "object",
         properties: { ...CODE_PROP },
@@ -69,7 +108,7 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_image",
+      name: TOOL.SESSION_GET_BLOCKS_IMG,
       description: `Render the code currently loaded in the editor as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedBrowserHint}`,
       parameters: {
         type: "object",
@@ -82,7 +121,7 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_hex_file",
+      name: TOOL.SESSION_GET_HEX_FILE,
       description: `Compile the code currently loaded in the editor and return the micro:bit .hex as a base64 string. ${loadedBrowserHint}`,
       parameters: {
         type: "object",
@@ -95,7 +134,7 @@ export const browserTools: ToolDescriptor[] = [
   {
     type: "function",
     function: {
-      name: "get_blocks_image_from_code",
+      name: TOOL.GET_BLOCKS_IMG_FROM_CODE,
       description:
         "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks without loading it into the editor. Useful for previewing code snippets while the user is still discussing changes.",
       parameters: {
@@ -119,7 +158,7 @@ export const browserToolNames = browserTools.map((t) => t.function.name);
 const sessionIdField = z
   .string()
   .describe(
-    "Opaque session identifier returned by start_session. Required on every stateful call.",
+    `Opaque session identifier returned by ${TOOL.SESSION_START}. Required on every stateful call.`,
   );
 
 const codeField = z.string().describe("MakeCode TypeScript source.");
@@ -130,9 +169,8 @@ export interface ServerToolMeta<Shape extends z.ZodRawShape = z.ZodRawShape> {
 }
 
 export const serverToolMeta = {
-  start_session: {
-    description:
-      "Allocate a new MakeCode editor session and return its session_id. Every stateful tool (set_code, get_current_code, get_blocks_image, get_hex_file, end_session) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically set_code). Do not stop after start_session alone; do not answer with plain text yet. Call end_session once the task is complete.",
+  [TOOL.SESSION_START]: {
+    description: `Allocate a new MakeCode editor session and return its session_id. Every stateful tool (${TOOL.SESSION_SET_CODE}, ${TOOL.SESSION_GET_CODE}, ${TOOL.SESSION_GET_BLOCKS_IMG}, ${TOOL.SESSION_GET_HEX_FILE}, ${TOOL.SESSION_END}) requires this id. IMPORTANT: this call is only the setup — after it returns, you MUST continue in the same response with the stateful tool(s) needed to fulfil the user's request (typically ${TOOL.SESSION_SET_CODE}). Do not stop after ${TOOL.SESSION_START} alone; do not answer with plain text yet. Call ${TOOL.SESSION_END} once the task is complete.`,
     inputShape: {
       label: z
         .string()
@@ -142,35 +180,34 @@ export const serverToolMeta = {
         ),
     },
   },
-  end_session: {
+  [TOOL.SESSION_END]: {
     description:
       "Close the MakeCode session identified by session_id and release its resources.",
     inputShape: { session_id: sessionIdField },
   },
-  get_current_code: {
+  [TOOL.SESSION_GET_CODE]: {
     description: `Return the TypeScript source currently loaded in the editor for this session. ${noSessionHint}`,
     inputShape: { session_id: sessionIdField },
   },
-  set_code: {
-    description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: get_blocks_image to show the user their program as blocks, or get_hex_file to produce a downloadable firmware image. ${noSessionHint}`,
+  [TOOL.SESSION_SET_CODE]: {
+    description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks, or ${TOOL.SESSION_GET_HEX_FILE} to produce a downloadable firmware image. ${noSessionHint}`,
     inputShape: { session_id: sessionIdField, code: codeField },
   },
-  get_blocks_image: {
+  [TOOL.SESSION_GET_BLOCKS_IMG]: {
     description: `Render the currently-loaded code as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedServerHint} ${noSessionHint}`,
     inputShape: { session_id: sessionIdField },
   },
-  get_hex_file: {
+  [TOOL.SESSION_GET_HEX_FILE]: {
     description: `Compile the currently-loaded code and return the micro:bit .hex as a base64 string. ${loadedServerHint} ${noSessionHint}`,
     inputShape: { session_id: sessionIdField },
   },
-  get_blocks_image_from_code: {
+  [TOOL.GET_BLOCKS_IMG_FROM_CODE]: {
     description:
       "Render the given TypeScript as a PNG image of the equivalent MakeCode blocks. Stateless — does not touch any session.",
     inputShape: { code: codeField },
   },
-  get_hex_file_from_code: {
-    description:
-      "Compile the given TypeScript and return the micro:bit .hex as a base64 string. Stateless — does not touch any session. Server target only; on the browser target use set_code + get_hex_file within a session.",
+  [TOOL.GET_HEX_FILE_FROM_CODE]: {
+    description: `Compile the given TypeScript and return the micro:bit .hex as a base64 string. Stateless — does not touch any session. Server target only; on the browser target use ${TOOL.SESSION_SET_CODE} + ${TOOL.SESSION_GET_HEX_FILE} within a session.`,
     inputShape: { code: codeField },
   },
 } as const satisfies Record<string, ServerToolMeta>;

@@ -166,7 +166,7 @@ describe("TabExecutor — stateful tools", () => {
 
   it("getBlocksImage on empty editor throws LLM-directed message", async () => {
     await expect(exec.getBlocksImage(sid)).rejects.toThrow(
-      /No code loaded in the editor\. Call set_code first/,
+      /No code loaded in the editor\. Call session_set_code first/,
     );
     expect(handles[0].driver.renderBlocksImage).not.toHaveBeenCalled();
   });

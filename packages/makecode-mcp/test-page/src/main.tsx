@@ -90,7 +90,7 @@ function App() {
   const handleSetCode = async () => {
     try {
       await exec().setCode(code);
-      append("set_code → ok");
+      append("session_set_code → ok");
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -99,7 +99,7 @@ function App() {
   const handleGetCode = async () => {
     try {
       const result = await exec().getCurrentCode();
-      append(`get_current_code → ${result.slice(0, 80)}…`);
+      append(`session_get_code → ${result.slice(0, 80)}…`);
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -113,7 +113,7 @@ function App() {
   const handleGetImage = async () => {
     try {
       const { pngBase64 } = await exec().getBlocksImage();
-      showImage(pngBase64, "get_blocks_image");
+      showImage(pngBase64, "session_get_blocks_img");
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -122,7 +122,7 @@ function App() {
   const handleGetImageFromCode = async () => {
     try {
       const { pngBase64 } = await exec().getBlocksImageFromCode(code);
-      showImage(pngBase64, "get_blocks_image_from_code");
+      showImage(pngBase64, "get_blocks_img_from_code");
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -139,7 +139,7 @@ function App() {
       a.download = "microbit.hex";
       a.click();
       URL.revokeObjectURL(url);
-      append(`get_hex_file → ${hex.length} bytes (downloading)`);
+      append(`session_get_hex_file → ${hex.length} bytes (downloading)`);
     } catch (e) {
       append(`ERROR: ${e}`);
     }
@@ -192,22 +192,22 @@ function App() {
           />
 
           <button style={btn(ready)} disabled={!ready} onClick={handleSetCode}>
-            set_code
+            session_set_code
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetCode}>
-            get_current_code
+            session_get_code
           </button>
 
           <hr />
 
           <button style={btn(ready)} disabled={!ready} onClick={handleGetImage}>
-            get_blocks_image (editor)
+            session_get_blocks_img (editor)
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetImageFromCode}>
-            get_blocks_image_from_code
+            get_blocks_img_from_code
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetHex}>
-            get_hex_file (download)
+            session_get_hex_file (download)
           </button>
 
           <hr />

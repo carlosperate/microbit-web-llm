@@ -64,15 +64,15 @@ describe("McpServer", () => {
     expect(names).toEqual([...serverToolNames].sort());
   });
 
-  it("calls start_session and returns the session_id as JSON text", async () => {
-    const res = await client.callTool({ name: "start_session", arguments: {} });
+  it("calls session_start and returns the session_id as JSON text", async () => {
+    const res = await client.callTool({ name: "session_start", arguments: {} });
     const text = (res.content as Array<{ type: string; text: string }>)[0].text;
     expect(JSON.parse(text)).toEqual({ session_id: "sid-123" });
   });
 
   it("session errors surface as isError with code", async () => {
     const res = await client.callTool({
-      name: "get_current_code",
+      name: "session_get_code",
       arguments: { session_id: "wrong" },
     });
     expect(res.isError).toBe(true);
@@ -82,9 +82,9 @@ describe("McpServer", () => {
     expect(parsed.error).toMatch(/nope/);
   });
 
-  it("get_blocks_image_from_code returns an MCP image content block", async () => {
+  it("get_blocks_img_from_code returns an MCP image content block", async () => {
     const res = await client.callTool({
-      name: "get_blocks_image_from_code",
+      name: "get_blocks_img_from_code",
       arguments: { code: "x" },
     });
     const content = res.content as Array<{ type: string; data?: string; mimeType?: string }>;

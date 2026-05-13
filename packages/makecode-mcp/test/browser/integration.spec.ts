@@ -22,27 +22,27 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByText("executor ready", { exact: true })).toBeVisible();
   });
 
-  test("set_code then get_current_code round-trips the TypeScript", async ({ page }) => {
+  test("session_set_code then session_get_code round-trips the TypeScript", async ({ page }) => {
     // Replace the default code with something distinctive
     await page.locator("textarea").fill('basic.showString("roundtrip")');
-    await clickButton(page, "set_code");
+    await clickButton(page, "session_set_code");
 
-    // Wait for set_code confirmation in the log
-    await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
+    // Wait for session_set_code confirmation in the log
+    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
 
-    await clickButton(page, "get_current_code");
-    await expect(page.getByText(/get_current_code →.*roundtrip/)).toBeVisible({ timeout: 10_000 });
+    await clickButton(page, "session_get_code");
+    await expect(page.getByText(/session_get_code →.*roundtrip/)).toBeVisible({ timeout: 10_000 });
   });
 
-  test("get_blocks_image_from_code opens the PNG modal with content", async ({ page }) => {
-    await clickButton(page, "get_blocks_image_from_code");
+  test("get_blocks_img_from_code opens the PNG modal with content", async ({ page }) => {
+    await clickButton(page, "get_blocks_img_from_code");
 
     // Modal appears
     await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
 
     // Log entry reports a non-trivial base64 size (> 1 KB)
-    await expect(page.getByText(/get_blocks_image_from_code → \d+\.\d+ KB/)).toBeVisible();
-    const sizeText = await page.getByText(/get_blocks_image_from_code → \d+\.\d+ KB/).textContent();
+    await expect(page.getByText(/get_blocks_img_from_code → \d+\.\d+ KB/)).toBeVisible();
+    const sizeText = await page.getByText(/get_blocks_img_from_code → \d+\.\d+ KB/).textContent();
     const kb = parseFloat(sizeText!.match(/([\d.]+) KB/)![1]);
     expect(kb).toBeGreaterThan(1);
 
@@ -51,21 +51,21 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByAltText("blocks PNG")).not.toBeVisible();
   });
 
-  test("get_blocks_image (editor) opens the modal after set_code", async ({ page }) => {
+  test("session_get_blocks_img (editor) opens the modal after session_set_code", async ({ page }) => {
     await page.locator("textarea").fill('basic.showLeds(`# . . . #\n. # . # .\n. . # . .\n. # . # .\n# . . . #`)');
-    await clickButton(page, "set_code");
-    await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
+    await clickButton(page, "session_set_code");
+    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
 
-    await clickButton(page, "get_blocks_image (editor)");
+    await clickButton(page, "session_get_blocks_img (editor)");
     await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
   });
 
-  test("get_hex_file triggers a download with a valid hex file", async ({ page }) => {
-    await clickButton(page, "set_code");
-    await expect(page.getByText("set_code → ok")).toBeVisible({ timeout: 15_000 });
+  test("session_get_hex_file triggers a download with a valid hex file", async ({ page }) => {
+    await clickButton(page, "session_set_code");
+    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
 
     const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
-    await clickButton(page, "get_hex_file (download)");
+    await clickButton(page, "session_get_hex_file (download)");
     const download = await downloadPromise;
 
     expect(download.suggestedFilename()).toBe("microbit.hex");

@@ -26,7 +26,7 @@ function makeDriver(): DriverMocks {
   };
 }
 
-// The iframe *is* the session: no start_session / end_session, no session_id.
+// The iframe *is* the session: no session_start / session_end, no session_id.
 // One executor instance maps to one iframe and its lifetime; state lives in
 // the iframe itself.
 describe("IframeExecutor — stateful tools", () => {
@@ -69,7 +69,7 @@ describe("IframeExecutor — stateful tools", () => {
 
   it("getBlocksImage on empty editor throws LLM-directed message", async () => {
     await expect(exec.getBlocksImage()).rejects.toThrow(
-      /No code loaded in the editor\. Call set_code first/,
+      /No code loaded in the editor\. Call session_set_code first/,
     );
     expect(driver.renderBlocksImage).not.toHaveBeenCalled();
   });

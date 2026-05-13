@@ -1,6 +1,12 @@
 import type { InitProgressReport } from "@mlc-ai/web-llm";
 import type { ChatCompletionFn, OpenAIMessage, StreamChunk } from "./tool-loop.js";
-import { createLogger, preview } from "makecode-mcp/browser";
+import {
+  HEX_TOOL_NAMES,
+  IMAGE_TOOL_NAMES,
+  TOOL,
+  createLogger,
+  preview,
+} from "makecode-mcp/browser";
 
 const log = createLogger("webllm");
 
@@ -74,8 +80,8 @@ export function isWebGPUSupported(): boolean {
 // following `tool` result messages into a single assistant text message. This
 // preserves the user→assistant→user→assistant alternation the model expects;
 // emitting tool results as fresh user turns made the model treat every tool
-// result as a new request and loop forever between get_blocks_image and
-// get_hex_file until maxSteps tripped.
+// result as a new request and loop forever between session_get_blocks_img and
+// session_get_hex_file until maxSteps tripped.
 function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -107,17 +113,16 @@ function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
   return out;
 }
 
-const TOOL_CONTINUATION_PROMPT =
-  "(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, do not call get_hex_file unless the student asked for it, and do not call any image tool just to look at code.)";
+const TOOL_CONTINUATION_PROMPT = `(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, do not call ${TOOL.SESSION_GET_HEX_FILE} unless the student asked for it, and do not call any image tool just to look at code.)`;
 
 // Tool results that are large opaque blobs the model cannot use — feeding them
 // back through tokenization wastes context and, for hex (~1.7MB base64), blows
 // the WebLLM tokenizer stack with "Maximum call stack size exceeded".
 function stubLargeResult(name: string, content: string): string {
-  if (name === "get_blocks_image" || name === "get_blocks_image_from_code") {
+  if (IMAGE_TOOL_NAMES.has(name as never)) {
     return `{"pngBase64":"<image rendered, ${content.length} bytes — not shown>"}`;
   }
-  if (name === "get_hex_file" || name === "get_hex_file_from_code") {
+  if (HEX_TOOL_NAMES.has(name as never)) {
     return `<hex compiled, ${content.length} bytes — not shown>`;
   }
   return content;

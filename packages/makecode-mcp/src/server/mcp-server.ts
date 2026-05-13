@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerExecutor } from "../shared/types.js";
 import { isSessionError } from "../shared/types.js";
-import { serverToolMeta } from "../shared/tools.js";
+import { serverToolMeta, TOOL } from "../shared/tools.js";
 import { createLogger, preview } from "../shared/logger.js";
 
 const log = createLogger("mcp");
@@ -73,32 +73,32 @@ export function buildMcpServer(options: McpServerOptions): McpServer {
       }) as never,
     );
 
-  reg<{ label?: string }>("start_session", async ({ label }) =>
+  reg<{ label?: string }>(TOOL.SESSION_START, async ({ label }) =>
     textResult(await exec.startSession(label !== undefined ? { label } : undefined)),
   );
-  reg<{ session_id: string }>("end_session", async ({ session_id }) => {
+  reg<{ session_id: string }>(TOOL.SESSION_END, async ({ session_id }) => {
     await exec.endSession(session_id);
     return textResult({ ok: true });
   });
-  reg<{ session_id: string }>("get_current_code", async ({ session_id }) =>
+  reg<{ session_id: string }>(TOOL.SESSION_GET_CODE, async ({ session_id }) =>
     textResult({ code: await exec.getCurrentCode(session_id) }),
   );
-  reg<{ session_id: string; code: string }>("set_code", async ({ session_id, code }) => {
+  reg<{ session_id: string; code: string }>(TOOL.SESSION_SET_CODE, async ({ session_id, code }) => {
     await exec.setCode(session_id, code);
     return textResult({ ok: true });
   });
-  reg<{ session_id: string }>("get_blocks_image", async ({ session_id }) => {
+  reg<{ session_id: string }>(TOOL.SESSION_GET_BLOCKS_IMG, async ({ session_id }) => {
     const { pngBase64 } = await exec.getBlocksImage(session_id);
     return imageResult(pngBase64);
   });
-  reg<{ session_id: string }>("get_hex_file", async ({ session_id }) =>
+  reg<{ session_id: string }>(TOOL.SESSION_GET_HEX_FILE, async ({ session_id }) =>
     textResult({ hex_base64: await exec.getHexFile(session_id) }),
   );
-  reg<{ code: string }>("get_blocks_image_from_code", async ({ code }) => {
+  reg<{ code: string }>(TOOL.GET_BLOCKS_IMG_FROM_CODE, async ({ code }) => {
     const { pngBase64 } = await exec.getBlocksImageFromCode(code);
     return imageResult(pngBase64);
   });
-  reg<{ code: string }>("get_hex_file_from_code", async ({ code }) =>
+  reg<{ code: string }>(TOOL.GET_HEX_FILE_FROM_CODE, async ({ code }) =>
     textResult({ hex_base64: await exec.getHexFileFromCode(code) }),
   );
 

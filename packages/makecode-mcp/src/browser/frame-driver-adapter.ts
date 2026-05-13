@@ -1,6 +1,7 @@
 import { createMakeCodeRenderBlocks } from "@microbit/makecode-embed/vanilla";
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "./driver-port.js";
 import { svgToPngBase64 } from "../shared/svg-to-png.js";
+import { TOOL } from "../shared/tools.js";
 
 interface WorkspaceSaveEventLike {
   project: {
@@ -58,7 +59,7 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     // MakeCode fires workspacesave events with partial text (e.g. only
     // main.blocks after a view switch following importProject). Replacing
     // wholesale would drop the main.ts we just imported and make the next
-    // get_blocks_image throw EMPTY_EDITOR_ERROR even though the editor still
+    // session_get_blocks_img throw EMPTY_EDITOR_ERROR even though the editor still
     // shows the code.
     const merged: Record<string, string> = {
       ...(this.latestFiles?.text ?? {}),
@@ -109,13 +110,13 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     // If the decompile fails (invalid TS), MakeCode shows its own error popup
     // and rejects switchBlocks. Surface that rejection as a setProject error
     // so the LLM sees a tool error and self-corrects rather than blindly
-    // calling get_blocks_image on uncompilable code.
+    // calling session_get_blocks_img on uncompilable code.
     try {
       await this.driver.switchBlocks();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `Code was loaded into the editor but failed to compile to blocks: ${reason}. Fix the TypeScript and call set_code again.`,
+        `Code was loaded into the editor but failed to compile to blocks: ${reason}. Fix the TypeScript and call ${TOOL.SESSION_SET_CODE} again.`,
       );
     }
   }

@@ -23,7 +23,7 @@ The browser and server targets have deliberately different shapes, each matched 
 | | **`BrowserExecutor`** | **`ServerExecutor`** |
 |---|---|---|
 | Session model | One executor = one iframe = one session. The iframe *is* the session. | One process serves many clients; each holds an opaque `session_id` mapped to a Puppeteer tab. |
-| Tools exposed | 6 (no `session_id`) | 8 (stateful tools take `session_id`, plus `start_session` / `end_session`) |
+| Tools exposed | 6 (no `session_id`) | 8 (stateful tools take `session_id`, plus `session_start` / `session_end`) |
 | Import | `import { IframeExecutor, MakeCodePanel } from "makecode-mcp/browser"` | `import { buildMcpServer, TabExecutor } from "makecode-mcp/server"` |
 
 Never import from `makecode-mcp/server` in browser code and vice versa.
@@ -34,16 +34,16 @@ Both targets expose the same core operations. Descriptions live in [src/shared/t
 
 | Tool | Browser | Server | Returns |
 |---|---|---|---|
-| `start_session` | — | ✓ | `{ session_id }` |
-| `end_session` | — | ✓ | void |
-| `get_current_code` | ✓ | ✓ | TypeScript source |
-| `set_code` | ✓ | ✓ | void |
-| `get_blocks_image` | ✓ | ✓ | `{ pngBase64 }` (server emits MCP `image` content) |
-| `get_hex_file` | ✓ | ✓ | base64 Universal Hex |
-| `get_blocks_image_from_code` | ✓ | ✓ | `{ pngBase64 }` (stateless; server emits MCP `image` content) |
+| `session_start` | — | ✓ | `{ session_id }` |
+| `session_end` | — | ✓ | void |
+| `session_get_code` | ✓ | ✓ | TypeScript source |
+| `session_set_code` | ✓ | ✓ | void |
+| `session_get_blocks_img` | ✓ | ✓ | `{ pngBase64 }` (server emits MCP `image` content) |
+| `session_get_hex_file` | ✓ | ✓ | base64 Universal Hex |
+| `get_blocks_img_from_code` | ✓ | ✓ | `{ pngBase64 }` (stateless; server emits MCP `image` content) |
 | `get_hex_file_from_code` | — | ✓ | base64 Universal Hex (stateless) |
 
-`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `get_blocks_image` requires prior `set_code` — the executor throws a descriptive error for the LLM to self-correct when the editor is empty. The browser target intentionally omits `get_hex_file_from_code`: the equivalent path is `set_code` + `get_hex_file`, which the system prompt directs the model toward.
+`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `session_get_blocks_img` requires prior `session_set_code` — the executor throws a descriptive error for the LLM to self-correct when the editor is empty. The browser target intentionally omits `get_hex_file_from_code`: the equivalent path is `session_set_code` + `session_get_hex_file`, which the system prompt directs the model toward.
 
 ## Browser target
 
@@ -82,7 +82,7 @@ That builds the package and launches the [MCP Inspector](https://modelcontextpro
 
 ### Headed mode (watch the editor live)
 
-By default the server runs Chromium headless. Pass `--headed` (or set `MKCP_HEADED=1`) at launch and every `start_session` opens the MakeCode editor in its own OS window so you can watch the LLM drive it:
+By default the server runs Chromium headless. Pass `--headed` (or set `MKCP_HEADED=1`) at launch and every `session_start` opens the MakeCode editor in its own OS window so you can watch the LLM drive it:
 
 ```bash
 node dist/server/bin.js --headed
@@ -93,9 +93,9 @@ MKCP_HEADED=1 node dist/server/bin.js
 Notes:
 
 - Headed mode is a launch-time choice — Chromium can't be toggled mid-process, so the flag fixes visibility for the whole server lifetime.
-- Each `start_session` creates a separate OS window (via CDP `Target.createTarget({ newWindow: true })`), not just another tab in the same window.
-- `start_session` accepts an optional `label` string; in headed mode it becomes part of the window title (`MakeCode — <label> (<short-session-id>)`) so multiple concurrent sessions are easy to tell apart in the OS taskbar / Cmd-Tab. The label is ignored when headless.
-- The persistent render tab used by the stateless `get_blocks_image_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag — snippet previews never pop windows.
+- Each `session_start` creates a separate OS window (via CDP `Target.createTarget({ newWindow: true })`), not just another tab in the same window.
+- `session_start` accepts an optional `label` string; in headed mode it becomes part of the window title (`MakeCode — <label> (<short-session-id>)`) so multiple concurrent sessions are easy to tell apart in the OS taskbar / Cmd-Tab. The label is ignored when headless.
+- The persistent render tab used by the stateless `get_blocks_img_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag — snippet previews never pop windows.
 
 ### Server layering
 
@@ -113,7 +113,7 @@ bin.ts (CLI)
                           └── startShellServer()         (serves shell.html + bundled shim)
 ```
 
-Each `start_session` allocates a Puppeteer tab (in headed mode: its own OS window) loading a local shell page; `end_session` closes the tab. Both browser processes stay alive between sessions. See [src/server/](src/server/).
+Each `session_start` allocates a Puppeteer tab (in headed mode: its own OS window) loading a local shell page; `session_end` closes the tab. Both browser processes stay alive between sessions. See [src/server/](src/server/).
 
 ## Configuring MCP clients
 
@@ -148,7 +148,7 @@ Both clients use the same `mcpServers` JSON shape. Add this entry to the relevan
 }
 ```
 
-Restart Claude Desktop after editing; the `start_session`, `set_code`, `get_blocks_image`, etc. tools appear in its tools menu. In LM Studio, start a chat with a tool-calling-capable model and enable the `makecode-mcp` server in the chat sidebar — Blocks images returned by `get_blocks_image*` render inline as PNGs in the conversation.
+Restart Claude Desktop after editing; the `session_start`, `session_set_code`, `session_get_blocks_img`, etc. tools appear in its tools menu. In LM Studio, start a chat with a tool-calling-capable model and enable the `makecode-mcp` server in the chat sidebar — Blocks images returned by `session_get_blocks_img*` render inline as PNGs in the conversation.
 
 ### GitHub Copilot (VS Code)
 

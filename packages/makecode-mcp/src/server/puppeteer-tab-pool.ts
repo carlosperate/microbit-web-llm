@@ -81,7 +81,7 @@ export class PuppeteerTabPool implements TabPool {
    * Kick off render-tab loading without awaiting it. Used at MCP server
    * startup so the makecode-embed renderer iframe (which has a hardcoded
    * 30s `renderready` timeout) has the maximum possible time to load on
-   * slow connections before the first `get_blocks_image_from_code` call.
+   * slow connections before the first `get_blocks_img_from_code` call.
    */
   prewarmRender(): void {
     this.renderPage().catch(() => {
