@@ -95,7 +95,7 @@ export function App(props: {
     // Cancel any prior in-flight load — switching model mid-download must
     // abort the previous one or two concurrent reloads race the engine.
     loadHandleRef.current?.cancel();
-    setLoadState({ status: "loading", progress: 0, text: "Starting…", modelId });
+    setLoadState({ status: "loading", progress: 0, text: "Starting", modelId });
     // Wrap the progress callback so a load that's been cancelled (or
     // superseded by another loadModel call) can't keep stomping the UI back
     // into the loading state — WebLLM keeps firing progress events all the
@@ -397,7 +397,10 @@ function LoadOverlay({
       <div className="progress-bar">
         <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
       </div>
-      <p style={{ fontSize: "0.75rem" }}>{state.text}</p>
+      <p style={{ fontSize: "0.75rem" }}>
+        {state.text}
+        {state.progress === 0 && <span className="loading-dots" aria-hidden="true" />}
+      </p>
       <button
         type="button"
         className="load-cancel-btn"

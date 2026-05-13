@@ -562,6 +562,19 @@ body {
 .progress-bar { width: 260px; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--accent); transition: width 150ms ease-out; }
 .loading-overlay-error { color: #991b1b; }
+.loading-dots::after {
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  content: "";
+  animation: loading-dots 1.6s linear infinite;
+}
+@keyframes loading-dots {
+  0%, 24%   { content: ""; }
+  25%, 49%  { content: "."; }
+  50%, 74%  { content: ".."; }
+  75%, 100% { content: "..."; }
+}
 .load-cancel-btn {
   margin-top: 0.5rem;
   font: inherit;
