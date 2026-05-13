@@ -1,7 +1,6 @@
 import { SYSTEM_PROMPT } from "./system-prompt.js";
 
 export type AccentColor = "cyan" | "teal" | "magenta";
-export type ChatVariant = "clean" | "tinted" | "bold";
 
 export interface ChatSettings {
   temperature: number;
@@ -11,7 +10,6 @@ export interface ChatSettings {
   systemPrompt: string;
   verboseLogging: boolean;
   accentColor: AccentColor;
-  chatVariant: ChatVariant;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -21,7 +19,6 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   systemPrompt: SYSTEM_PROMPT,
   verboseLogging: true,
   accentColor: "cyan",
-  chatVariant: "clean",
 };
 
 export const TEMPERATURE_RANGE = { min: 0, max: 1.5, step: 0.05 };

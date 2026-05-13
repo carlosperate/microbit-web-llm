@@ -7,7 +7,7 @@ import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
 import { loadWebLLM, isWebGPUSupported, LoadCancelledError, MODELS, MODEL_ID, type LoadHandle, type LoadState, type ModelId } from "./chat/webllm-engine.js";
-import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor, type ChatVariant } from "./chat/settings.js";
+import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 
 const log = createLogger("app");
@@ -20,22 +20,13 @@ const ACCENT_TOKENS: Record<AccentColor, { accent: string; dark: string; light: 
   magenta: { accent: "#D4127A", dark: "#a00060", light: "#fce8f3", border: "#f0b0d8" },
 };
 
-const VARIANT_TOKENS: Record<ChatVariant, { panelBg: string; msgAreaBg: string }> = {
-  clean:  { panelBg: "#ffffff", msgAreaBg: "#f7f9fb" },
-  tinted: { panelBg: "#f5f8fa", msgAreaBg: "#edf1f5" },
-  bold:   { panelBg: "#ffffff", msgAreaBg: "#f3f5f8" },
-};
-
 function buildCssVars(settings: ChatSettings): React.CSSProperties {
   const a = ACCENT_TOKENS[settings.accentColor] ?? ACCENT_TOKENS.cyan;
-  const v = VARIANT_TOKENS[settings.chatVariant] ?? VARIANT_TOKENS.clean;
   return {
     "--accent": a.accent,
     "--accent-dark": a.dark,
     "--accent-light": a.light,
     "--accent-border": a.border,
-    "--panel-bg": v.panelBg,
-    "--msg-area-bg": v.msgAreaBg,
     "--divider": a.border,
   } as React.CSSProperties;
 }

@@ -6,7 +6,6 @@ import {
   TEMPERATURE_RANGE,
   type AccentColor,
   type ChatSettings,
-  type ChatVariant,
 } from "./chat/settings.js";
 
 export interface SettingsPanelProps {
@@ -21,12 +20,6 @@ const ACCENT_OPTIONS: { value: AccentColor; label: string; color: string }[] = [
   { value: "cyan",    label: "Cyan",    color: "#00C8E8" },
   { value: "teal",    label: "Teal",    color: "#00B4A0" },
   { value: "magenta", label: "Magenta", color: "#D4127A" },
-];
-
-const VARIANT_OPTIONS: { value: ChatVariant; label: string }[] = [
-  { value: "clean",  label: "Clean"  },
-  { value: "tinted", label: "Tinted" },
-  { value: "bold",   label: "Bold"   },
 ];
 
 export function SettingsPanel({
@@ -80,21 +73,6 @@ export function SettingsPanel({
                   className={`settings-swatch${draft.accentColor === opt.value ? " active" : ""}`}
                   style={draft.accentColor === opt.value ? { background: opt.color, borderColor: opt.color } : {}}
                   onClick={() => update("accentColor", opt.value)}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="settings-field">
-            <span style={{ fontSize: "0.85rem" }}>Panel style</span>
-            <div className="settings-swatches">
-              {VARIANT_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={`settings-swatch${draft.chatVariant === opt.value ? " active" : ""}`}
-                  onClick={() => update("chatVariant", opt.value)}
                 >
                   {opt.label}
                 </button>

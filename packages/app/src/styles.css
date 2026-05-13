@@ -453,7 +453,7 @@ body {
   left: 0;
   right: 0;
   z-index: 2;
-  padding: 36px 14px 12px;
+  padding: 36px 14px 37px;
   background: var(--panel-bg);
   border-top: 2px solid transparent;
   border-image: linear-gradient(to right, var(--divider) 70%, #e1e1e1) 1;
@@ -466,7 +466,7 @@ body {
   right: 14px;
   display: flex;
   gap: 8px;
-  align-items: flex-end;
+  align-items: center;
   background: white;
   border: 1.5px solid var(--accent-border);
   border-radius: 14px;
@@ -818,6 +818,9 @@ body {
    * stay tuned to the visual design. */
   .composer-input {
     font-size: 16px;
+  }
+  .composer {
+    padding: 32px 14px;
   }
 
   /* The header sub-row already wraps, but on a phone the model selector +
