@@ -1,41 +1,63 @@
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "../browser/driver-port.js";
 import type { PageLike } from "./browser-pool.js";
 
-// These browser-side lambdas run inside the puppeteer page, where the shim
-// has installed `window.__mkcp` (see src/server/shell/shim.ts). We cast
-// through `unknown` because page.evaluate's signature is intentionally loose.
+// Iframe RPC boundary. The shim methods (see src/server/shell/shim.ts) return
+// a tagged union `Result<T>` rather than throwing across page.evaluate —
+// Puppeteer's exception marshalling would otherwise append a browser-side
+// stack frame to the error message and leak it to the MCP client. Translating
+// here, after the boundary, keeps the model-facing message clean.
+export type ShimResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+function unwrap<T>(result: ShimResult<T>): T {
+  if (result.ok) return result.value;
+  throw new Error(result.error);
+}
 
 export class PuppeteerDriver implements MakeCodeDriver {
   constructor(private readonly page: PageLike) {}
 
-  getProject(): Promise<MakeCodeProjectFiles> {
-    return this.page.evaluate(
-      `window.__mkcp.saveProject()`,
-    ) as Promise<MakeCodeProjectFiles>;
-  }
-
-  async setProject(project: MakeCodeProjectFiles): Promise<void> {
-    await this.page.evaluate(
-      (text: unknown) =>
-        (window as unknown as { __mkcp: { importProject(t: unknown): Promise<void> } })
-          .__mkcp.importProject(text),
-      project.text,
+  async getProject(): Promise<MakeCodeProjectFiles> {
+    return unwrap(
+      (await this.page.evaluate(
+        `window.__mkcp.saveProject()`,
+      )) as ShimResult<MakeCodeProjectFiles>,
     );
   }
 
-  compile(): Promise<{ name: string; hex: string }> {
-    return this.page.evaluate(`window.__mkcp.compile()`) as Promise<{
-      name: string;
-      hex: string;
-    }>;
+  async setProject(project: MakeCodeProjectFiles): Promise<void> {
+    unwrap(
+      (await this.page.evaluate(
+        (text: unknown) =>
+          (
+            window as unknown as {
+              __mkcp: { importProject(t: unknown): Promise<unknown> };
+            }
+          ).__mkcp.importProject(text),
+        project.text,
+      )) as ShimResult<void>,
+    );
   }
 
-  renderBlocksImage(code: string): Promise<string> {
-    return this.page.evaluate(
-      (c: unknown) =>
-        (window as unknown as { __mkcp: { renderBlocksImage(c: unknown): Promise<string> } })
-          .__mkcp.renderBlocksImage(c),
-      code,
-    ) as Promise<string>;
+  async compile(): Promise<{ name: string; hex: string }> {
+    return unwrap(
+      (await this.page.evaluate(`window.__mkcp.compile()`)) as ShimResult<{
+        name: string;
+        hex: string;
+      }>,
+    );
+  }
+
+  async renderBlocksImage(code: string): Promise<string> {
+    return unwrap(
+      (await this.page.evaluate(
+        (c: unknown) =>
+          (
+            window as unknown as {
+              __mkcp: { renderBlocksImage(c: unknown): Promise<unknown> };
+            }
+          ).__mkcp.renderBlocksImage(c),
+        code,
+      )) as ShimResult<string>,
+    );
   }
 }

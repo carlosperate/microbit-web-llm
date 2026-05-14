@@ -10,10 +10,14 @@ import type { MakeCodeDriver } from "./driver-port.js";
 
 const log = createLogger("executor");
 
+// Chunked to stay O(n): per-byte string concat is O(n²) on a 1.7 MB hex.
 function utf8ToBase64(text: string): string {
   const bytes = new TextEncoder().encode(text);
+  const CHUNK = 0x8000;
   let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
   return btoa(binary);
 }
 

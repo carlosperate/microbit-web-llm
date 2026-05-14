@@ -5,12 +5,31 @@ import {
 import { MakeCodeFrameDriverAdapter } from "../../browser/frame-driver-adapter.js";
 import { fillProjectDefaults } from "../../shared/project-defaults.js";
 
+// Tagged-union return shape for every page-RPC call. Surfaces page-side
+// failures as data rather than letting them traverse `page.evaluate` as
+// exceptions — Puppeteer otherwise appends a browser stack frame to the
+// thrown message which leaks all the way to the MCP client. The driver
+// (src/server/puppeteer-driver.ts) translates `{ ok: false }` back into a
+// plain `throw new Error(...)` on the Node side.
+type ShimResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
 interface ShimApi {
   ready(): Promise<void>;
-  importProject(text: Record<string, string>): Promise<void>;
-  saveProject(): Promise<{ text: Record<string, string> }>;
-  compile(): Promise<{ name: string; hex: string }>;
-  renderBlocksImage(code: string): Promise<string>;
+  importProject(text: Record<string, string>): Promise<ShimResult<null>>;
+  saveProject(): Promise<ShimResult<{ text: Record<string, string> }>>;
+  compile(): Promise<ShimResult<{ name: string; hex: string }>>;
+  renderBlocksImage(code: string): Promise<ShimResult<string>>;
+}
+
+async function asResult<T>(fn: () => Promise<T>): Promise<ShimResult<T>> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 declare global {
@@ -81,22 +100,27 @@ window.__mkcp = {
   async ready() {
     await ensureAdapter();
   },
-  async importProject(text) {
-    const adapter = await ensureAdapter();
-    await adapter.setProject({ text });
-  },
-  async saveProject() {
-    const adapter = await ensureAdapter();
-    return adapter.getProject();
-  },
-  async compile() {
-    const adapter = await ensureAdapter();
-    return adapter.compile();
-  },
-  async renderBlocksImage(code) {
-    const adapter = await ensureAdapter();
-    // scale=1 (vs the browser-target default of 2) — the MCP transport sends
-    // the PNG as base64 to the LLM, where a 2× retina image is wasted bytes.
-    return adapter.renderBlocksImage(code, 1);
-  },
+  importProject: (text) =>
+    asResult(async () => {
+      const adapter = await ensureAdapter();
+      await adapter.setProject({ text });
+      return null;
+    }),
+  saveProject: () =>
+    asResult(async () => {
+      const adapter = await ensureAdapter();
+      return adapter.getProject();
+    }),
+  compile: () =>
+    asResult(async () => {
+      const adapter = await ensureAdapter();
+      return adapter.compile();
+    }),
+  renderBlocksImage: (code) =>
+    asResult(async () => {
+      const adapter = await ensureAdapter();
+      // scale=1 (vs the browser-target default of 2) — the MCP transport
+      // sends the PNG as base64 to the LLM, where 2× retina is wasted bytes.
+      return adapter.renderBlocksImage(code, 1);
+    }),
 };

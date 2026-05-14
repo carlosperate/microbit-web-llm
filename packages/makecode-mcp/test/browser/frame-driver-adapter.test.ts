@@ -33,7 +33,7 @@ const HEADER = {
   id: "hdr-1",
   target: "microbit",
   targetVersion: "8.0.21",
-  name: "spike",
+  name: "test-project",
   meta: {},
   editor: "tsprj",
   pubId: "",
@@ -54,10 +54,38 @@ describe("MakeCodeFrameDriverAdapter", () => {
   let driver: ReturnType<typeof makeDriverStub>;
   let adapter: MakeCodeFrameDriverAdapter;
 
+  // setProject now awaits a post-switchBlocks workspacesave to confirm
+  // decompile actually happened (MakeCode replies success:true even when it
+  // silently falls back to JS view). Tests that exercise the happy path
+  // schedule a synthetic post-switch save here so they don't hit the 5 s
+  // timeout. Tests that want to exercise the timeout itself override
+  // driver.switchBlocks themselves.
+  function autoConfirmDecompile() {
+    let lastText: Record<string, string> | undefined;
+    driver.importProject.mockImplementation(
+      async (opts: { project: { text?: Record<string, string> } }) => {
+        lastText = opts.project.text;
+      },
+    );
+    driver.switchBlocks.mockImplementation(async () => {
+      setTimeout(
+        () =>
+          adapter.handleWorkspaceSave({
+            project: {
+              header: HEADER,
+              text: lastText ?? { "main.ts": "any-non-empty" },
+            },
+          }),
+        0,
+      );
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     driver = makeDriverStub();
     adapter = new MakeCodeFrameDriverAdapter(driver);
+    autoConfirmDecompile();
   });
 
   it("initializes the blocks renderer lazily on first renderBlocksImage call", async () => {
@@ -108,9 +136,9 @@ describe("MakeCodeFrameDriverAdapter", () => {
     await Promise.resolve();
     expect(driver.compile).toHaveBeenCalledOnce();
 
-    adapter.handleDownload({ name: "microbit-spike", hex: ":00000001FF\n" });
+    adapter.handleDownload({ name: "microbit-test", hex: ":00000001FF\n" });
     await expect(pending).resolves.toEqual({
-      name: "microbit-spike",
+      name: "microbit-test",
       hex: ":00000001FF\n",
     });
   });
@@ -196,6 +224,97 @@ describe("MakeCodeFrameDriverAdapter", () => {
     // The import itself succeeded — the optimistic cache reflects the new code
     // so a follow-up session_set_code from the model can replace it.
     expect(driver.importProject).toHaveBeenCalledOnce();
+  });
+
+  it("setProject also rewraps a 'Cannot convert to blocks'-style rejection so the model knows to fix the TS", async () => {
+    // This is the common failure: model emits invalid TS, MakeCode imports it
+    // but can't switch to blocks. The model needs an actionable hint or it
+    // proceeds to session_get_blocks_img and confuses itself with a stale view.
+    driver.switchBlocks.mockRejectedValueOnce(new Error("Cannot convert to blocks"));
+    await expect(
+      adapter.setProject({ text: { ...FILES, "main.ts": "broken();" } }),
+    ).rejects.toThrow(/compile to blocks.*Cannot convert to blocks.*session_set_code/i);
+  });
+
+  it("setProject throws when MakeCode silently falls back to JS view (no post-switch workspacesave within timeout)", async () => {
+    // The common decompile-failure path: MakeCode replies success:true to
+    // switchblocks but shows an in-iframe "Cannot convert to blocks" modal
+    // and stops emitting workspacesave events. Time-boxing the wait turns
+    // that silence into a recoverable error for the model.
+    vi.useFakeTimers();
+    try {
+      // No autoConfirmDecompile this time — switchBlocks resolves but no save fires.
+      driver.switchBlocks.mockImplementation(async () => {});
+      const pending = adapter.setProject({
+        text: { ...FILES, "main.ts": "not actually decompilable" },
+      });
+      const settled = pending.catch((e) => e);
+      // Let the import + switchBlocks promises resolve before advancing timers.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await settled;
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toMatch(
+        /failed to compile to blocks.*session_set_code/i,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("setProject skips the post-switch wait for empty TS (no false-positive on initial blank import)", async () => {
+    // The blank-project bootstrap path imports an empty main.ts and shouldn't
+    // be penalised by the decompile-confirm timer.
+    driver.switchBlocks.mockImplementation(async () => {});
+    await expect(adapter.setProject({ text: { ...FILES, "main.ts": "" } })).resolves
+      .toBeUndefined();
+    expect(driver.switchBlocks).toHaveBeenCalledOnce();
+  });
+
+  it("setProject lets a transient switchBlocks error propagate unwrapped (no misleading 'fix the TypeScript' hint)", async () => {
+    // Transport-level rejection from makecode-embed (generic "not successful")
+    // is not a decompile failure — rewrapping it as "Fix the TypeScript" would
+    // send the model on a wild goose chase modifying perfectly valid code.
+    const transient = new Error("MakeCode response was not successful with no error specified");
+    driver.switchBlocks.mockRejectedValueOnce(transient);
+    await expect(
+      adapter.setProject({ text: { ...FILES, "main.ts": 'basic.showNumber(1)' } }),
+    ).rejects.toBe(transient);
+  });
+
+  it("compile rejects with a timeout error if no download event arrives in 120s", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = adapter.compile();
+      // Swallow the eventual rejection so an unhandled-rejection warning doesn't trip vitest.
+      const settled = pending.catch((e) => e);
+      await Promise.resolve();
+      expect(driver.compile).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(120_000);
+      const result = await settled;
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toMatch(/Compile timed out after 120s/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("compile is recoverable after a timeout — the next compile starts cleanly", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = adapter.compile().catch((e) => e);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(120_000);
+      await first;
+      // A late onDownload from the timed-out compile must not slip into the next one.
+      adapter.handleDownload({ name: "stale", hex: ":STALE\n" });
+      const second = adapter.compile();
+      await Promise.resolve();
+      adapter.handleDownload({ name: "fresh", hex: ":FRESH\n" });
+      await expect(second).resolves.toEqual({ name: "fresh", hex: ":FRESH\n" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("workspacesave events merge into the cache instead of replacing", async () => {
