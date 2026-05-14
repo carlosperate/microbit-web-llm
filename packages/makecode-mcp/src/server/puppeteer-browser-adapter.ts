@@ -9,10 +9,6 @@ interface PuppeteerLikeBrowser {
   newPage(): Promise<PageLike>;
   pages(): Promise<PageLike[]>;
   target(): { createCDPSession(): Promise<CdpSessionLike> };
-  waitForTarget(
-    predicate: (t: TargetLike) => boolean,
-    options?: { timeout?: number },
-  ): Promise<TargetLike>;
 }
 
 interface CdpSessionLike {
@@ -20,10 +16,8 @@ interface CdpSessionLike {
   detach?(): Promise<void>;
 }
 
-interface TargetLike {
-  _targetId?: string;
-  page(): Promise<PageLike | null>;
-}
+const OPEN_WINDOW_TIMEOUT_MS = 10_000;
+const OPEN_WINDOW_POLL_MS = 25;
 
 export function adaptPuppeteerBrowser(browser: PuppeteerLikeBrowser): BrowserLike {
   return {
@@ -32,20 +26,31 @@ export function adaptPuppeteerBrowser(browser: PuppeteerLikeBrowser): BrowserLik
     newPage: () => browser.newPage(),
     pages: () => browser.pages(),
     async openWindow(url: string): Promise<PageLike> {
+      // CDP `newWindow: true` (not `window.open`) so headed mode gets a real
+      // OS window. The new page is found by set-difference against a pre-call
+      // `pages()` snapshot — avoids Puppeteer's private `_targetId`.
       const cdp = await browser.target().createCDPSession();
       try {
-        const result = (await cdp.send("Target.createTarget", {
+        const before = new Set(await browser.pages());
+        await cdp.send("Target.createTarget", {
           url: "about:blank",
           newWindow: true,
-        })) as { targetId: string };
-        const { targetId } = result;
-        const target = await browser.waitForTarget(
-          (t) => t._targetId === targetId,
-        );
-        const page = await target.page();
-        if (!page) throw new Error("openWindow: target has no page");
-        await page.goto(url, { waitUntil: "domcontentloaded" });
-        return page;
+        });
+        const deadline = Date.now() + OPEN_WINDOW_TIMEOUT_MS;
+        let newPage: PageLike | undefined;
+        while (Date.now() < deadline) {
+          const current = await browser.pages();
+          newPage = current.find((p) => !before.has(p));
+          if (newPage) break;
+          await new Promise((r) => setTimeout(r, OPEN_WINDOW_POLL_MS));
+        }
+        if (!newPage) {
+          throw new Error(
+            `openWindow timed out after ${OPEN_WINDOW_TIMEOUT_MS / 1000}s waiting for the new window to appear`,
+          );
+        }
+        await newPage.goto(url, { waitUntil: "domcontentloaded" });
+        return newPage;
       } finally {
         await cdp.detach?.().catch(() => {});
       }

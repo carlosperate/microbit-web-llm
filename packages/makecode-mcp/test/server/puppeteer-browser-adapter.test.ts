@@ -1,53 +1,89 @@
 import { describe, it, expect, vi } from "vitest";
 import { adaptPuppeteerBrowser } from "../../src/server/puppeteer-browser-adapter.ts";
 
+function makePage() {
+  return {
+    goto: vi.fn(async () => undefined),
+    close: vi.fn(async () => {}),
+    evaluate: vi.fn(async () => undefined),
+    url: () => "about:blank",
+  };
+}
+
 describe("adaptPuppeteerBrowser → openWindow", () => {
-  it("sends Target.createTarget with newWindow: true and resolves the new page", async () => {
-    const targetId = "T-1";
-    const fakePage = {
-      goto: vi.fn(async () => undefined),
-      close: vi.fn(async () => {}),
-      evaluate: vi.fn(async () => undefined),
-      url: () => "about:blank",
-    };
-    const fakeTarget = {
-      _targetId: targetId,
-      page: vi.fn(async () => fakePage),
-    };
-    const cdpSend = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "Target.createTarget") return { targetId };
-      return {};
-    });
+  it("creates a new window via CDP and resolves the new page (identified by set-difference, not by private _targetId)", async () => {
+    // CDP `Target.createTarget` with `newWindow: true` keeps headed-mode
+    // parity (real OS windows, not just new tabs). The adapter then picks
+    // the new page out of `browser.pages()` by set-difference against a
+    // pre-snapshot — no reliance on Puppeteer's renamed `_targetId` field.
+    const existing = makePage();
+    const created = makePage();
+    let createTargetCalled = false;
     const cdp = {
-      send: cdpSend,
+      send: vi.fn(async (method: string, _params: unknown) => {
+        if (method === "Target.createTarget") {
+          createTargetCalled = true;
+          return { targetId: "ignored" };
+        }
+        return {};
+      }),
       detach: vi.fn(async () => {}),
     };
     const browser = {
       isConnected: () => true,
       close: vi.fn(async () => {}),
       newPage: vi.fn(),
-      pages: vi.fn(async () => [fakePage]),
+      pages: vi.fn(async () => (createTargetCalled ? [existing, created] : [existing])),
       target: () => ({ createCDPSession: async () => cdp }),
-      waitForTarget: vi.fn(
-        async (predicate: (t: unknown) => boolean) => {
-          if (!predicate(fakeTarget)) throw new Error("predicate failed");
-          return fakeTarget;
-        },
-      ),
     };
 
     const adapted = adaptPuppeteerBrowser(browser as never);
     const page = await adapted.openWindow!("http://example/shell.html");
 
-    expect(cdpSend).toHaveBeenCalledWith(
+    expect(cdp.send).toHaveBeenCalledWith(
       "Target.createTarget",
-      expect.objectContaining({ newWindow: true }),
+      expect.objectContaining({ newWindow: true, url: "about:blank" }),
     );
-    expect(fakeTarget.page).toHaveBeenCalled();
-    expect(fakePage.goto).toHaveBeenCalledWith(
+    expect(page).toBe(created);
+    expect(created.goto).toHaveBeenCalledWith(
       "http://example/shell.html",
       expect.objectContaining({ waitUntil: "domcontentloaded" }),
     );
-    expect(page).toBe(fakePage);
+  });
+
+  it("times out with a clear error if the new window never appears (no silent hang)", async () => {
+    vi.useFakeTimers();
+    try {
+      const existing = makePage();
+      const cdp = {
+        send: vi.fn(async () => ({})),
+        detach: vi.fn(async () => {}),
+      };
+      const browser = {
+        isConnected: () => true,
+        close: vi.fn(async () => {}),
+        newPage: vi.fn(),
+        // pages() never grows — simulates a `Target.createTarget` that was
+        // acknowledged at the CDP level but whose page never materialised.
+        pages: vi.fn(async () => [existing]),
+        target: () => ({ createCDPSession: async () => cdp }),
+      };
+      const adapted = adaptPuppeteerBrowser(browser as never);
+
+      const pending = adapted.openWindow!("http://example/shell.html");
+      const settled = pending.catch((e) => e);
+      // Advance past the 10 s deadline. Each tick runs all queued polling
+      // sleeps; advancing in chunks lets the pages() polls resolve.
+      for (let i = 0; i < 500; i++) await vi.advanceTimersByTimeAsync(50);
+      const result = await settled;
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toMatch(
+        /openWindow timed out after 10s/i,
+      );
+      // CDP session should still be detached on the failure path.
+      expect(cdp.detach).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
