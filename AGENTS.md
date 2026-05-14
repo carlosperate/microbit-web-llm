@@ -122,6 +122,7 @@ All MakeCode iframe integration — browser executor, server executor Puppeteer 
 
 `MakeCodePanel` is a React component that wraps `@microbit/makecode-embed/react`. It must:
 - Accept an `onExecutorReady(executor: BrowserExecutor) => void` callback prop (typed as the interface, not the concrete class)
+- Accept an optional `onLoadError(reason: string) => void` callback. The panel starts a `LoadWatchdog` (`src/browser/load-watchdog.ts`) at mount that fires `onLoadError` once if neither `onEditorContentLoaded` nor `onWorkspaceLoaded` has fired within `MAKECODE_LOAD_TIMEOUT_MS` (30 s). The watchdog is cleared on first ready event and disposed on unmount.
 - Expose nothing else about its internal iframe to the host app
 - Handle iframe load/unload lifecycle cleanly, including calling `dispose()` on the adapter on unmount
 

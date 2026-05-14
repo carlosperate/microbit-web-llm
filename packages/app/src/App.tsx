@@ -67,6 +67,7 @@ export function App(props: {
   const loadHandleRef = useRef<LoadHandle | null>(null);
   const executorRef = useRef<BrowserExecutor | null>(null);
   const [executorReady, setExecutorReady] = useState(false);
+  const [editorLoadError, setEditorLoadError] = useState<string | null>(null);
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -87,10 +88,8 @@ export function App(props: {
     // abort the previous one or two concurrent reloads race the engine.
     loadHandleRef.current?.cancel();
     setLoadState({ status: "loading", progress: 0, text: "Starting", modelId });
-    // Wrap the progress callback so a load that's been cancelled (or
-    // superseded by another loadModel call) can't keep stomping the UI back
-    // into the loading state — WebLLM keeps firing progress events all the
-    // way through to "Finish loading on WebGPU" even after engine.unload().
+    // Wrap progress so a cancelled/superseded load can't keep stomping the UI
+    // back into "loading" — WebLLM keeps firing events even after unload().
     let handle: LoadHandle | null = null;
     handle = loadWebLLM(
       (r) => {
@@ -133,12 +132,11 @@ export function App(props: {
     const handle = loadHandleRef.current;
     if (!handle) return;
     log.info("user: cancel model load");
-    // Update UI synchronously so the user sees the cancel take effect even if
-    // WebLLM's internal load loop continues. On cache hits, the load-from-cache
-    // phase in tvm.fetchTensorCacheInternal calls `artifactCache.fetchWithCache`
-    // *without* passing the abort signal, so engine.unload() can't actually
-    // stop that work — we let it run to completion in the background and drop
-    // the result via the handle-mismatch check in loadModel.
+    // Update UI synchronously so the cancel is visible even if WebLLM's load
+    // loop continues. On cache hits, fetchTensorCacheInternal's load-from-cache
+    // phase doesn't pass the abort signal, so unload() can't stop it — we let
+    // it finish in the background and discard via the handle-mismatch check
+    // in loadModel.
     loadHandleRef.current = null;
     completionRef.current = null;
     setLoadedModelId(null);
@@ -178,14 +176,17 @@ export function App(props: {
     log.info("MakeCode executor ready");
     executorRef.current = executor;
     setExecutorReady(true);
+    setEditorLoadError(null);
+  }, []);
+
+  const handleEditorLoadError = useCallback((reason: string) => {
+    log.warn("MakeCode panel reported load failure", { reason });
+    setEditorLoadError(reason);
   }, []);
 
   useEffect(() => {
     if (isLoggingEnabled()) {
-      // eslint-disable-next-line no-console
-      console.log(
-        "%c[mkcp]",
-        "color:#0ea5e9;font-weight:700",
+      log.info(
         "verbose logging ON. Disable with: localStorage.setItem('mkcp:log','0') then reload, or add ?mkcp-log=0 to the URL.",
       );
     }
@@ -309,13 +310,42 @@ export function App(props: {
           )}
         </div>
         <div className="editor-pane">
-          <MakeCodePanel onExecutorReady={handleExecutorReady} />
+          <MakeCodePanel
+            onExecutorReady={handleExecutorReady}
+            onLoadError={handleEditorLoadError}
+          />
+          {editorLoadError && (
+            <EditorLoadErrorOverlay
+              reason={editorLoadError}
+              onReload={() => window.location.reload()}
+            />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+
+function EditorLoadErrorOverlay({
+  reason,
+  onReload,
+}: {
+  reason: string;
+  onReload: () => void;
+}) {
+  return (
+    <div className="model-gate-overlay" data-testid="editor-load-error">
+      <div className="model-gate-card">
+        <h3>Editor failed to load</h3>
+        <p>{reason}</p>
+        <button className="composer-send" onClick={onReload}>
+          Reload
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ModelNotLoadedOverlay() {
   return (

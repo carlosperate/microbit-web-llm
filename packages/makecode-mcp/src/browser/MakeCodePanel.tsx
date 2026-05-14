@@ -6,13 +6,21 @@ import {
 } from "@microbit/makecode-embed/vanilla";
 import { IframeExecutor } from "./iframe-executor.js";
 import { MakeCodeFrameDriverAdapter } from "./frame-driver-adapter.js";
+import { LoadWatchdog } from "./load-watchdog.js";
 import type { BrowserExecutor } from "../shared/types.js";
 import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("panel");
 
+/** How long to wait for the iframe's first onEditorContentLoaded /
+ *  onWorkspaceLoaded before reporting a load failure. */
+export const MAKECODE_LOAD_TIMEOUT_MS = 30_000;
+
 export interface MakeCodePanelProps {
   onExecutorReady: (executor: BrowserExecutor) => void;
+  /** Called once if the iframe never signals ready within
+   *  MAKECODE_LOAD_TIMEOUT_MS. */
+  onLoadError?: (reason: string) => void;
   baseUrl?: string;
   controllerId?: string;
   className?: string;
@@ -21,6 +29,7 @@ export interface MakeCodePanelProps {
 
 export function MakeCodePanel({
   onExecutorReady,
+  onLoadError,
   baseUrl = "https://makecode.microbit.org",
   controllerId = "makecode-mcp",
   className,
@@ -29,6 +38,9 @@ export function MakeCodePanel({
   const driverRef = useRef<MakeCodeFrameDriver | null>(null);
   const adapterRef = useRef<MakeCodeFrameDriverAdapter | null>(null);
   const notifiedRef = useRef(false);
+  const onLoadErrorRef = useRef(onLoadError);
+  onLoadErrorRef.current = onLoadError;
+  const watchdogRef = useRef<LoadWatchdog | null>(null);
 
   const ensureAdapter = useCallback(() => {
     if (!adapterRef.current && driverRef.current) {
@@ -37,12 +49,10 @@ export function MakeCodePanel({
     return adapterRef.current;
   }, []);
 
-  // Seed the iframe with a project *we* own so the workspace header captured
-  // via onWorkspaceSave is one we know. Returning [] here causes MakeCode to
-  // fall back to whatever's in IndexedDB (or the home screen), and a later
-  // importProject writes to the workspace but doesn't reload the visible editor.
-  // Use makecode-embed's defaultMakeCodeProject so the editor opens on the
-  // standard on-start block instead of a blank workspace.
+  // Seed with a project we own so the header captured via onWorkspaceSave is
+  // one we know. Returning [] makes MakeCode fall back to IndexedDB and a
+  // later importProject won't reload the visible editor. defaultMakeCodeProject
+  // opens on the standard on-start block.
   const initialProjects = useMemo(
     () => async () => [defaultMakeCodeProject],
     [],
@@ -55,6 +65,7 @@ export function MakeCodePanel({
     const adapter = ensureAdapter();
     if (!adapter || notifiedRef.current) return;
     notifiedRef.current = true;
+    watchdogRef.current?.notifyReady();
     log.info("iframe ready → handing executor to host app");
     onExecutorReady(new IframeExecutor(adapter));
   }, [ensureAdapter, onExecutorReady]);
@@ -85,8 +96,16 @@ export function MakeCodePanel({
 
   useEffect(() => {
     log.info("mounting MakeCodePanel", { baseUrl, controllerId });
+    const watchdog = new LoadWatchdog(MAKECODE_LOAD_TIMEOUT_MS, (reason) => {
+      log.warn("iframe load watchdog tripped", { reason });
+      onLoadErrorRef.current?.(reason);
+    });
+    watchdogRef.current = watchdog;
+    watchdog.start();
     return () => {
       log.info("unmounting MakeCodePanel → disposing adapter");
+      watchdog.dispose();
+      watchdogRef.current = null;
       adapterRef.current?.dispose();
       driverRef.current = null;
       adapterRef.current = null;
