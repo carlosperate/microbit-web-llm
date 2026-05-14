@@ -180,6 +180,54 @@ describe("runToolLoop", () => {
     expect(executor.setCode).not.toHaveBeenCalled();
   });
 
+  it("surfaces malformed tool-call arguments as an isError tool result without invoking the executor", async () => {
+    // The grammar-constrained decoder usually keeps arguments parseable, but
+    // failure modes (truncation, model emitting raw text) do happen. Surface
+    // the JSON error to the model as a tool error so it can re-emit, instead
+    // of silently coercing to {} and letting the executor produce a less
+    // obvious downstream failure.
+    const executor = makeExecutor();
+    const capturedHistory: any[][] = [];
+    let turn = 0;
+    const engine: ChatCompletionFn = async ({ messages }) => {
+      capturedHistory.push(messages);
+      turn++;
+      if (turn === 1) {
+        return asStream([
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: "bad",
+                function: { name: "session_set_code", arguments: '{"code": "basic.showNumber(1)' },
+              },
+            ],
+          }),
+          chunk({}, "tool_calls"),
+        ]);
+      }
+      return asStream([chunk({ content: "retry" }), chunk({}, "stop")]);
+    };
+    const events: ToolLoopEvent[] = [];
+    for await (const ev of runToolLoop({
+      completion: engine,
+      executor,
+      messages: [{ role: "user", content: "write a program" }],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      events.push(ev);
+    }
+    expect(executor.setCode).not.toHaveBeenCalled();
+    const toolEvent = events.find((e) => e.type === "tool-call");
+    expect(toolEvent).toBeDefined();
+    expect(toolEvent && "isError" in toolEvent && toolEvent.isError).toBe(true);
+    expect(toolEvent && "result" in toolEvent && toolEvent.result).toMatch(/Invalid JSON arguments/i);
+    const toolMsg = capturedHistory[1].find((m: any) => m.role === "tool");
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg.content).toMatch(/Invalid JSON arguments/i);
+  });
+
   it("returns a structured tool error when the executor throws", async () => {
     const executor = makeExecutor({
       getBlocksImage: vi.fn(async () => {

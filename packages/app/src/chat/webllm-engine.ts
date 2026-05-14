@@ -1,4 +1,4 @@
-import type { InitProgressReport } from "@mlc-ai/web-llm";
+import type { ChatCompletionChunk, InitProgressReport } from "@mlc-ai/web-llm";
 import type { ChatCompletionFn, OpenAIMessage, StreamChunk } from "./tool-loop.js";
 import {
   HEX_TOOL_NAMES,
@@ -10,14 +10,11 @@ import {
 
 const log = createLogger("webllm");
 
-// All supported models go through the same grammar-constrained tool-calling
-// path: a system prompt describing the tools plus `response_format` forcing a
-// JSON-array of `{name, arguments}` objects. WebLLM's built-in Hermes-2-Pro
-// path is deliberately bypassed — its injected prompt omits the
-// `<tool_call></tool_call>` wrapper instruction Hermes-3 was trained on, so
-// Hermes-3 emits bare JSON or markdown that WebLLM's parser then rejects.
-// Owning the prompt and parser end-to-end gives reliable behaviour across
-// every model in the picker and any future additions.
+// All models go through the same grammar-constrained path: system prompt
+// describing the tools + `response_format` forcing a JSON array of
+// `{name, arguments}`. WebLLM's native Hermes-2-Pro path is bypassed — its
+// injected prompt omits the `<tool_call></tool_call>` wrapper Hermes-3 was
+// trained on, so Hermes-3 emits bare JSON the parser then rejects.
 export const MODEL_ID = "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC";
 
 export const MODELS = [
@@ -71,17 +68,12 @@ export function isWebGPUSupported(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
-// WebLLM's chat templates (e.g. Qwen2.5) reject `role: "tool"` and assistant
-// messages carrying `tool_calls`. This engine bypasses WebLLM's native
-// tool-calling path and drives the model with a custom system prompt + JSON
-// grammar, so the tool exchange only needs to be visible to the model as text.
-//
-// Collapse each assistant `tool_calls` message together with the immediately
-// following `tool` result messages into a single assistant text message. This
-// preserves the user→assistant→user→assistant alternation the model expects;
-// emitting tool results as fresh user turns made the model treat every tool
-// result as a new request and loop forever between session_get_blocks_img and
-// session_get_hex_file until maxSteps tripped.
+// WebLLM's chat templates reject role:"tool" and assistant `tool_calls`. We
+// bypass the native tool path and own the prompt + grammar, so tool exchanges
+// only need to be visible as text. Collapse each assistant tool_calls message
+// + following tool results into one assistant text message — preserving the
+// user→assistant alternation. Emitting results as fresh user turns made the
+// model treat each result as a new request and loop forever.
 function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -119,10 +111,10 @@ const TOOL_CONTINUATION_PROMPT = `(Tool results above. The original task is most
 // back through tokenization wastes context and, for hex (~1.7MB base64), blows
 // the WebLLM tokenizer stack with "Maximum call stack size exceeded".
 function stubLargeResult(name: string, content: string): string {
-  if (IMAGE_TOOL_NAMES.has(name as never)) {
+  if (IMAGE_TOOL_NAMES.has(name)) {
     return `{"pngBase64":"<image rendered, ${content.length} bytes — not shown>"}`;
   }
-  if (HEX_TOOL_NAMES.has(name as never)) {
+  if (HEX_TOOL_NAMES.has(name)) {
     return `<hex compiled, ${content.length} bytes — not shown>`;
   }
   return content;
@@ -137,7 +129,7 @@ function safeParseArgs(raw: string): unknown {
 }
 
 async function* parseToolCallStream(
-  stream: AsyncIterable<any>,
+  stream: AsyncIterable<ChatCompletionChunk>,
 ): AsyncIterable<StreamChunk> {
   // The engine streams content deltas holding the JSON array. Suppress them
   // from the caller and emit one synthetic chunk at end with tool_calls parsed.
@@ -147,7 +139,11 @@ async function* parseToolCallStream(
     const choice = chunk.choices?.[0];
     if (!choice) continue;
     if (choice.delta?.content) buffer += choice.delta.content;
-    if (choice.finish_reason) finish = choice.finish_reason;
+    // WebLLM also surfaces "abort"; collapse it into the tool_calls branch
+    // below so the loop reads it as a non-terminal completion.
+    if (choice.finish_reason) {
+      finish = choice.finish_reason === "abort" ? "tool_calls" : choice.finish_reason;
+    }
   }
   log.debug("raw model output", {
     finish,
@@ -224,23 +220,17 @@ export function loadWebLLM(
     log.info("loadWebLLM: importing @mlc-ai/web-llm", { modelId });
     const webllm = await import("@mlc-ai/web-llm");
     if (cancelled) throw new LoadCancelledError();
-    // `new MLCEngine + engine.reload(modelId)` is the same pair `CreateMLCEngine`
-    // calls internally. We split them so we can hold an engine reference *before*
-    // reload begins — `engine.unload()` aborts the reloadController on the
-    // network/cache fetches inside reload, which is how we cancel.
+    // Split `new MLCEngine` from `reload(modelId)` (vs CreateMLCEngine) so we
+    // hold the engine reference *before* reload begins — engine.unload() then
+    // aborts reload's network/cache fetches, which is how we cancel.
     const engine = new webllm.MLCEngine({
       initProgressCallback: (r) => {
-        // Throwing here is the ONLY way to actually stop a cache-load
-        // mid-flight. WebLLM's reloadController is only consulted by the
-        // network fetches; the cache-load loop in `fetchTensorCacheInternal`
-        // calls `artifactCache.fetchWithCache` without a signal (see
-        // @mlc-ai/web-llm/lib/index.js, the loading-phase shard loop), so
-        // engine.unload() alone lets the load run to completion, uploading
-        // every shard to the GPU. The throw propagates out of the
-        // progress-emitting for-loop, out of fetchTensorCacheInternal, and
-        // is caught by our `await engine.reload()` try/catch below.
-        //
-        // Gated on `cancelled` so a normal load is unaffected.
+        // Throwing here is the ONLY way to stop a cache-load mid-flight.
+        // engine.unload() aborts WebLLM's reloadController, but the cache-load
+        // loop in fetchTensorCacheInternal doesn't consult it (no signal on
+        // artifactCache.fetchWithCache). Without this throw, a cancel during
+        // cache load still uploads every shard to the GPU. Gated on
+        // `cancelled` so normal loads are unaffected.
         if (cancelled) throw new LoadCancelledError();
         if (r.progress === 0 || r.progress === 1 || Math.round((r.progress ?? 0) * 100) % 20 === 0) {
           log.info("load progress", { progress: r.progress, text: r.text });
@@ -297,11 +287,10 @@ export function loadWebLLM(
       });
       return stream as unknown as AsyncIterable<StreamChunk>;
     }
-    // Inject the tools-describing system prompt and grammar-constrain the
-    // output to a JSON array of `{name, arguments}` objects. We do NOT pass
-    // `tools` through — the schema has already encoded them.
-    // Preserve any app-level system messages by prepending them so the app's
-    // guidance still reaches the model.
+    // Inject the tools-describing system prompt and grammar-constrain output
+    // to a JSON array of `{name, arguments}`. We do NOT pass `tools` through —
+    // the schema already encodes them. Prepend app-level system messages so
+    // their guidance still reaches the model.
     const toolsPrompt = buildToolsSystemPrompt(tools);
     const appSystem = messages
       .filter((m) => m.role === "system")
@@ -322,7 +311,7 @@ export function loadWebLLM(
       stream: true,
       ...samplingOpts,
     });
-      return parseToolCallStream(stream as any);
+      return parseToolCallStream(stream as AsyncIterable<ChatCompletionChunk>);
     };
   })();
   return {

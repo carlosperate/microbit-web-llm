@@ -36,39 +36,39 @@ TypeScript project references are used across packages. Run `npm run build --wor
 
 The library has two executor interfaces in `src/shared/types.ts`, chosen to match how each target is actually used:
 
-- **`BrowserExecutor`** (5 methods, no `session_id` anywhere) — one iframe per executor instance. The iframe itself is the session: its editor state persists for the lifetime of the instance. App developers create one `IframeExecutor` per MakeCode panel and hand it to the chat runtime. Tool calls are stateless from the LLM's perspective — no `start_session` / `end_session` ceremony.
-- **`ServerExecutor`** (8 methods, stateful methods take `session_id`) — one MCP process can serve many LLM clients at once, each holding an opaque `session_id` that maps to a dedicated Puppeteer tab. `start_session` opens a tab; `end_session` closes it.
+- **`BrowserExecutor`** (5 methods, no `session_id` anywhere) — one iframe per executor instance. The iframe itself is the session: its editor state persists for the lifetime of the instance. App developers create one `IframeExecutor` per MakeCode panel and hand it to the chat runtime. Tool calls are stateless from the LLM's perspective — no `session_start` / `session_end` ceremony.
+- **`ServerExecutor`** (8 methods, stateful methods take `session_id`) — one MCP process can serve many LLM clients at once, each holding an opaque `session_id` that maps to a dedicated Puppeteer tab. `session_start` opens a tab; `session_end` closes it.
 
 If a new tool makes sense on both targets, implement it on both interfaces. The shared tool schemas in `src/shared/tools.ts` are split into `browserTools` (5) and `serverTools` (8) — they are deliberately not symmetric, so keep descriptions consistent across both where the behaviour is the same and let them diverge where the targets actually differ.
 
 ### Tool availability
 
-Both targets expose the same core operations, but `get_hex_file_from_code` is server-only. The `makecode-embed` library exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract. The browser target therefore omits `get_hex_file_from_code` entirely from `browserTools` and from `BrowserExecutor` rather than advertising a tool that always throws — the system prompt directs the model toward `set_code` + `get_hex_file` instead. On the server target, `start_session` / `end_session` gate the stateful tools; `_from_code` variants are session-less on both targets.
+Both targets expose the same core operations, but `get_hex_file_from_code` is server-only. The `makecode-embed` library exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract. The browser target therefore omits `get_hex_file_from_code` entirely from `browserTools` and from `BrowserExecutor` rather than advertising a tool that always throws — the system prompt directs the model toward `session_set_code` + `session_get_hex_file` instead. On the server target, `session_start` / `session_end` gate the stateful tools; `_from_code` variants are session-less on both targets.
 
 ### The `_from_code` variants are pure functions
 
-`get_blocks_image_from_code` and `get_hex_file_from_code` take TypeScript code as an argument and return an artifact. They must not read or write any persistent editor state. Treat them as stateless — same input always produces the same output.
+`get_blocks_img_from_code` and `get_hex_file_from_code` take TypeScript code as an argument and return an artifact. They must not read or write any persistent editor state. Treat them as stateless — same input always produces the same output.
 
-### `get_blocks_image` requires loaded code
+### `session_get_blocks_img` requires loaded code
 
 In browser executor, `getBlocksImage()` must check that the editor is not empty before proceeding. If it is empty, throw an `Error` with a message written for the LLM to read and self-correct:
 
 ```
-No code loaded in the editor. Call set_code first to load code before requesting get_blocks_image.
+No code loaded in the editor. Call session_set_code first to load code before requesting session_get_blocks_img.
 ```
 
 Do not throw a generic error. The message is part of the LLM interaction loop.
 
-### `set_code` merges workspacesave events and surfaces decompile failures
+### `session_set_code` merges workspacesave events and surfaces decompile failures
 
 `MakeCodeFrameDriverAdapter.setProject` does two things beyond calling `importProject`, both motivated by failure modes that hit the LLM tool loop hard:
 
 1. **Merge workspacesave events into the cache instead of replacing.** MakeCode fires `workspacesave` events with partial `text` (e.g. only `main.blocks` after a view switch following `importProject`). Replacing `latestFiles.text` wholesale would drop the `main.ts` we just imported and make the next `getBlocksImage` throw `EMPTY_EDITOR_ERROR`. Combined with sequential tool dispatch in the chat tool loop (so a fast read can't outrun a slow `setCode`), the optimistic cache update at the top of `setProject` plus this merge is enough — there's no echo-wait state machine.
-2. **Propagate `switchBlocks` rejection.** Importing with an empty `main.blocks` lands the editor in JS view; `switchBlocks` then forces decompile-to-blocks. If the TS is invalid, MakeCode shows its own error popup *and* `switchBlocks` rejects. The adapter rethrows that rejection from `setProject` with a message the model can act on (`"Code was loaded into the editor but failed to compile to blocks: <reason>. Fix the TypeScript and call set_code again."`). The tool loop surfaces this as `isError: true` so the model self-corrects rather than calling `get_blocks_image` on uncompilable code.
+2. **Propagate `switchBlocks` rejection.** Importing with an empty `main.blocks` lands the editor in JS view; `switchBlocks` then forces decompile-to-blocks. If the TS is invalid, MakeCode shows its own error popup *and* `switchBlocks` rejects. The adapter rethrows that rejection from `setProject` with a message the model can act on (`"Code was loaded into the editor but failed to compile to blocks: <reason>. Fix the TypeScript and call session_set_code again."`). The tool loop surfaces this as `isError: true` so the model self-corrects rather than calling `session_get_blocks_img` on uncompilable code.
 
 ### Tests are written first
 
-Every new piece of production code lands with a failing test authored *before* the implementation. Red → green → refactor. Writing tests after the fact overfits them to whatever the code happens to do, masking wrong behaviour. Unit tests (Vitest) live under `packages/*/test/`; integration/e2e tests (Playwright) live under the same `test/` tree but run only via `npm run test:e2e`. Spike scripts are exempt — their self-assertions are their tests.
+Every new piece of production code lands with a failing test authored *before* the implementation. Red → green → refactor. Writing tests after the fact overfits them to whatever the code happens to do, masking wrong behaviour. Unit tests (Vitest) live under `packages/*/test/`; integration/e2e tests (Playwright) live under the same `test/` tree but run only via `npm run test:e2e`.
 
 ### Keep tests and docs in sync with the code
 
@@ -89,7 +89,7 @@ The only connection between `ChatPanel` and `MakeCodePanel` in the app is the `I
 This is a POC for teaching and research; a live trace of what the system is doing is how the developer (and student observers) debug it. Logging is enabled by default and must stay that way.
 
 - Use the shared logger from `packages/makecode-mcp/src/shared/logger.ts`. Import via `makecode-mcp/browser` or `makecode-mcp/server` — never hand-roll `console.log` prefixes or instantiate a second logger.
-- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces include `app`, `adapter`, `tool-loop`, `webllm`, `panel`, `executor`, `mcp`, `tab-executor` — reuse these when extending the same area.
+- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces include `app`, `adapter`, `tool-loop`, `webllm`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool` — reuse these when extending the same area.
 - Log the lifecycle events a reader needs to follow the flow: entry/exit of a run, each tool-loop step with `finish_reason` and pending-call count, every tool dispatch with args summary + result size, stall detection and recovery, errors. If you add a new tool case, log both the request and the result.
 - Use `preview(value, maxChars?)` for anything that can be large (code, PNG base64, hex, JSON blobs). Never dump raw multi-kB strings to the console.
 - Use `log.time(label)` (returns an end-fn) to instrument any async boundary a user might suspect of hanging — model load, tool dispatch, completion stream.
@@ -114,7 +114,7 @@ Never import from `makecode-mcp/server` in browser code and vice versa. The buil
 
 ### Always use `@microbit/makecode-embed`
 
-All MakeCode iframe integration — browser executor, server executor Puppeteer code, spike scripts, manual test pages — must use the `@microbit/makecode-embed` library (published as `@microbit/makecode-embed` on npm; source: https://github.com/microbit-foundation/makecode-embed). Never hand-roll the `postMessage` protocol. For non-React contexts use the `./vanilla` export (`MakeCodeFrameDriver`, `createMakeCodeRenderBlocks`); for React use `./react`. If a feature seems to require dropping to raw postMessage, check the library first — the answer is almost always there.
+All MakeCode iframe integration — browser executor, server executor Puppeteer code, manual test pages — must use the `@microbit/makecode-embed` library (published as `@microbit/makecode-embed` on npm; source: https://github.com/microbit-foundation/makecode-embed). Never hand-roll the `postMessage` protocol. For non-React contexts use the `./vanilla` export (`MakeCodeFrameDriver`, `createMakeCodeRenderBlocks`); for React use `./react`. If a feature seems to require dropping to raw postMessage, check the library first — the answer is almost always there.
 
 ### React component
 
@@ -129,35 +129,39 @@ The executor is bound to the panel's iframe for its lifetime. Editor state (the 
 
 `BrowserPool` manages one persistent Puppeteer browser process for the lifetime of the MCP server. It must:
 - Launch lazily on first use, not at import time
-- Expose a `withTab<T>(fn: (page: PageLike) => Promise<T>): Promise<T>` method
+- Expose `openPage()`, `openWindow(url)`, and a `withTab<T>(fn: (page: PageLike) => Promise<T>): Promise<T>` method
 - Always close the tab in a `finally` block regardless of errors
 - Never close the browser process itself (it stays alive between requests)
 - Handle browser crashes by relaunching on next use
 
-`BrowserPool` is deliberately typed against a minimal `PageLike` (`close`/`goto`/`evaluate`) and a `BrowserLauncher` callback so it can be unit-tested with doubles. Puppeteer is only wired in at `bin.ts` and `PuppeteerTabPool`.
+`BrowserPool` is deliberately typed against a minimal `PageLike` (`close`/`goto`/`evaluate`/`url?`) and a `BrowserLauncher` callback so it can be unit-tested with doubles. Puppeteer is only wired in at `bin.ts`, in the `adaptPuppeteerBrowser` helper that wraps a real `puppeteer.Browser` into a `BrowserLike` (including the CDP-backed `openWindow` implementation).
+
+`PuppeteerTabPool` consumes **two** `BrowserPool`s: a **render pool** (always headless, hosts the persistent render tab used by `get_blocks_img_from_code` and the transient tabs used by `get_hex_file_from_code`) and a **session pool** (headless or headed per the `--headed` CLI flag / `MKCP_HEADED=1` env var, hosts one tab per `session_start`). In headed mode each session opens in its own OS window via CDP `Target.createTarget({ newWindow: true })`; the shell URL carries `session=<id>&label=<encoded>` query params so the shim sets `document.title` to a label Chromium uses as the OS window title.
 
 ### Server target layering
 
 ```
-bin.ts (CLI)
-  └── buildMcpServer({ executor })                    ← src/server/mcp-server.ts
-        └── TabExecutor (implements MakeCodeExecutor) ← src/server/tab-executor.ts
-              └── TabPool (interface)                 ← src/server/tab-pool.ts
-                    └── PuppeteerTabPool              ← src/server/puppeteer-tab-pool.ts
-                          ├── BrowserPool             ← src/server/browser-pool.ts
-                          ├── PuppeteerDriver         ← src/server/puppeteer-driver.ts
-                          └── startShellServer()      ← src/server/shell/shell-server.ts
+bin.ts (CLI)                                                ← parses --headed / MKCP_HEADED
+  └── buildMcpServer({ executor })                          ← src/server/mcp-server.ts
+        └── TabExecutor (implements ServerExecutor)         ← src/server/tab-executor.ts
+              └── TabPool (interface)                       ← src/server/tab-pool.ts
+                    └── PuppeteerTabPool                    ← src/server/puppeteer-tab-pool.ts
+                          ├── renderPool: BrowserPool       ← src/server/browser-pool.ts (always headless)
+                          ├── sessionPool: BrowserPool      ← src/server/browser-pool.ts (headless or headed)
+                          ├── adaptPuppeteerBrowser()       ← src/server/puppeteer-browser-adapter.ts (CDP openWindow)
+                          ├── PuppeteerDriver               ← src/server/puppeteer-driver.ts
+                          └── startShellServer()            ← src/server/shell/shell-server.ts
 ```
 
-`TabExecutor` (implements `ServerExecutor`) owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
+`TabExecutor` (implements `ServerExecutor`) owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. It generates the `session_id` itself and forwards `{ sessionId, label }` to `TabPool.openTab` so the pool can embed both into the shell URL. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
 
 ### MCP server shell
 
 The MCP server serves a static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`:
 
 - `src/server/shell/shell.html` — one `<iframe id="mk">` and a `<script type="module" src="/shim.js">`. Used for sessions and `getHexFileFromCode`.
-- `src/server/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`importProject`, `saveProject`, `compile`, `renderBlocks`).
-- `src/server/shell/render.html` + `src/server/shell/render-shim.ts` — render-only page (no editor iframe) that loads `createMakeCodeRenderBlocks` and exposes `window.__mkcp_render.renderBlocksImage`. `PuppeteerTabPool` keeps a single persistent render tab on this page so `getBlocksImageFromCode` is near-instant — it never pays the cost of loading makecode.microbit.org.
+- `src/server/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocks`). The shim eagerly starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns the same init promise so `PuppeteerTabPool.openTab` can block `session_start` until the editor's `onEditorContentLoaded` has fired. This matters on slow networks where MakeCode takes many seconds to load — without the await, the first tool call (e.g. `session_set_code`) would itself trigger and wait on the load, but the MCP client meanwhile thinks the session is ready.
+- `src/server/shell/render.html` + `src/server/shell/render-shim.ts` — render-only page (no editor iframe) that loads `createMakeCodeRenderBlocks` and exposes `window.__mkcp_render.renderBlocksImage`. The shim eagerly calls `getRenderer()` at script load so the makecode-embed renderer iframe starts loading the moment the page opens; this matters because makecode-embed enforces a hardcoded 30s `renderready` timeout from `initialize()` and slow connections can otherwise blow past it before the first tool call. `PuppeteerTabPool` keeps a single persistent render tab on this page so `getBlocksImageFromCode` is near-instant — it never pays the cost of loading makecode.microbit.org. `bin.ts` calls `PuppeteerTabPool.prewarmRender()` at MCP server startup to open this render tab eagerly (don't await — failures are swallowed and the next `renderBlocksImage` call retries), giving slow networks the maximum window before the first request.
 - `src/server/shell/shell-server.ts` — reads both HTML files and bundles both shims with esbuild on first use (cached for the process lifetime), then serves them on `http://127.0.0.1:<ephemeral>`.
 
 `PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Do not add more IPC surface (e.g., `page.exposeFunction`) unless a tool genuinely cannot be expressed as a single evaluate call.
@@ -166,17 +170,25 @@ The MCP server serves a static shell page to every Puppeteer tab from a local HT
 
 `src/server/mcp-server.ts` uses the high-level `McpServer` from `@modelcontextprotocol/sdk/server/mcp.js` and registers each tool with `server.registerTool(name, { description, inputSchema }, handler)`. The single source of truth is `serverToolMeta` in `shared/tools.ts` — Zod raw shapes + descriptions. `McpServer` consumes the shapes directly; `serverTools` (JSON Schema descriptors used by tests and the browser-shaped path) are derived from the same shapes via `z.toJSONSchema(z.strictObject(shape))` so the two views can never drift.
 
-Each handler is wrapped in a `safe(name, fn)` helper that catches `SessionError` and arbitrary errors and returns `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }`. Without this wrapper `McpServer` would surface a thrown error as a transport-level error, losing the session-code taxonomy (`missing` / `unknown` / `expired`) that LLMs use to self-correct.
+Each handler is wrapped in a `safe(name, fn)` helper that catches `SessionError` and arbitrary errors and returns `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }`. Without this wrapper `McpServer` would surface a thrown error as a transport-level error, losing the session-code taxonomy (`missing` / `unknown`) that LLMs use to self-correct.
 
 ### CLI entrypoint
 
 `bin.ts` (registered as the `makecode-mcp` bin) wires `PuppeteerTabPool` → `TabExecutor` → `buildMcpServer` → `StdioServerTransport`, and disposes the executor on SIGINT/SIGTERM. The server is a standard stdio MCP server — point Claude Desktop / MCP Inspector at `node dist/server/bin.js` (or `npx makecode-mcp` once installed).
 
+Chrome is located at startup via `resolveChromePath` (`src/server/chrome-path.ts`), which prefers `PUPPETEER_EXECUTABLE_PATH` and otherwise calls `Launcher.getFirstInstallation()` from `chrome-launcher`. The executable path is passed to every `puppeteer.launch` call (both pools). Puppeteer's bundled Chromium download is intentionally skipped in the .mcpb staging install (`PUPPETEER_SKIP_DOWNLOAD=true`) so the extension bundle stays OS-agnostic — the user provides Chrome.
+
 For local manual testing, run `npm run dev:test-mcp -w makecode-mcp`. This builds the package and launches the MCP Inspector (`npx @modelcontextprotocol/inspector`) wired to `node dist/server/bin.js`. See https://modelcontextprotocol.io/docs/tools/inspector for the Inspector UI.
+
+### Claude Desktop extension (.mcpb)
+
+`packages/makecode-mcp/manifest.json` + `scripts/build-mcpb.mjs` package the server as a Claude Desktop extension. The script stages `dist/`, `src/`, `manifest.json`, `README.md`, and a trimmed `package.json` into `.mcpb-staging/`, runs `npm install --omit=dev` there with `PUPPETEER_SKIP_DOWNLOAD=true`, then calls `npx @anthropic-ai/mcpb pack`. The resulting `dist/makecode-mcp.mcpb` is platform-agnostic because Chrome is discovered at runtime. The manifest exposes two `user_config` fields — `headed_mode` (boolean → `MKCP_HEADED` env var) and `chrome_path` (file → `PUPPETEER_EXECUTABLE_PATH`); the resolver treats empty `chrome_path` as "auto-detect", so the file picker can stay optional.
+
+`src/` ships in the bundle on purpose: `shell-server.ts` reads `src/server/shell/*.html` at runtime and esbuild-bundles `shim.ts` / `render-shim.ts` on first use, and those shims import from `src/browser/` and `src/shared/`. Do not add `src/` to `.mcpbignore` without first pre-bundling those entry points at build time.
 
 ### Shared project defaults
 
-Default MakeCode project files (`pxt.json` with `preferredEditor: "tsprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` as `fillProjectDefaults(text, code)` and `EMPTY_EDITOR_ERROR`. Both executors and the server shim import from here — do not re-declare these constants in new code.
+Default MakeCode project files (`pxt.json` with `preferredEditor: "blocksprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` as `fillProjectDefaults(text, code)` and `EMPTY_EDITOR_ERROR`. Both executors and the server shim import from here — do not re-declare these constants in new code.
 
 ## Package: `app`
 
@@ -216,8 +228,8 @@ Do not truncate or drop tool-call messages from the history mid-loop. The full t
 
 The loop also handles Qwen-specific quirks:
 - **Empty `tool_calls` as done-signal** — when `finish_reason === "tool_calls"` but no calls were produced (the schema-constrained model emitted `[]`), the loop makes one follow-up call with `tools: []` to let the model stream a plain-text reply, then returns. This never recurses.
-- **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`set_code`, `get_current_code`, `get_blocks_image`, `get_hex_file`, or the `_from_code` variants). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
-- **Repeat-call recovery** — the smaller models sometimes ignore the system-prompt rule "never call the same tool twice" and lock into a single-tool loop (e.g. `get_current_code` every step). `runToolLoop` tracks every dispatched `(name + arguments)` in a `seenCalls` set; when a batch arrives where *every* call is a repeat, it skips dispatch and yields the plain-text follow-up instead of hammering the same tool until `maxSteps` trips. A mixed batch (some new, some repeats) still dispatches — interleaved reads are legitimate.
+- **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`session_set_code`, `session_get_code`, `session_get_blocks_img`, `session_get_hex_file`, or the `_from_code` variants). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
+- **Repeat-call recovery** — the smaller models sometimes ignore the system-prompt rule "never call the same tool twice" and lock into a single-tool loop (e.g. `session_get_code` every step). `runToolLoop` tracks every dispatched `(name + arguments)` in a `seenCalls` set; when a batch arrives where *every* call is a repeat, it skips dispatch and yields the plain-text follow-up instead of hammering the same tool until `maxSteps` trips. A mixed batch (some new, some repeats) still dispatches — interleaved reads are legitimate.
 
 The plain-text follow-up itself is shared across all three exits (done-signal, repeat-call, stall fallback) via a local `plainTextFollowUp(label)` generator that streams from a tools-disabled completion.
 
@@ -225,28 +237,28 @@ The plain-text follow-up itself is shared across all three exits (done-signal, r
 
 WebLLM's chat templates (e.g. Qwen2.5-Coder) reject `role: "tool"` and assistant messages carrying `tool_calls`, and additionally enforce that the last message be `user` or `tool` (`MessageOrderError`). This engine bypasses WebLLM's native tool-calling path and drives the model with a custom system prompt + JSON grammar, so the tool exchange only needs to be visible to the model as text.
 
-`flattenToolHistory` in `webllm-engine.ts` collapses each assistant `tool_calls` message together with the immediately following `tool` results into a single assistant text message (the JSON the model itself emitted, plus `[result <name>] <content>` lines). This preserves the `user → assistant → user → assistant` alternation the model expects. An earlier attempt that emitted tool results as fresh `user` turns made the model treat every result as a new request and loop forever between `get_blocks_image` and `get_hex_file` until `maxSteps` tripped.
+`flattenToolHistory` in `webllm-engine.ts` collapses each assistant `tool_calls` message together with the immediately following `tool` results into a single assistant text message (the JSON the model itself emitted, plus `[result <name>] <content>` lines). This preserves the `user → assistant → user → assistant` alternation the model expects. An earlier attempt that emitted tool results as fresh `user` turns made the model treat every result as a new request and loop forever between `session_get_blocks_img` and `session_get_hex_file` until `maxSteps` tripped.
 
 After collapsing, if the last message is `assistant`, a fixed `TOOL_CONTINUATION_PROMPT` is appended as a `user` message to satisfy WebLLM's last-message rule. The text nudges the model to stop calling tools and produce a plain-text explanation; it deliberately does **not** mention `[]` because spelling out `[]` in the prompt biased the model toward emitting empty arrays even when it should have called tools.
 
-Image (`get_blocks_image*`, ~21KB base64) and hex (`get_hex_file*`, ~1.7MB base64) tool results are stubbed to a short summary in the flattened history. The model cannot use the bytes anyway, and feeding the hex back through WebLLM's tokenizer overflowed the JS stack with "Maximum call stack size exceeded".
+Image (`session_get_blocks_img*`, ~21KB base64) and hex (`session_get_hex_file*`, ~1.7MB base64) tool results are stubbed to a short summary in the flattened history. The model cannot use the bytes anyway, and feeding the hex back through WebLLM's tokenizer overflowed the JS stack with "Maximum call stack size exceeded".
 
 The same flatten runs on the tools-disabled follow-up path — WebLLM's role rules apply regardless of whether `tools` was passed in.
 
 Because the browser target has no sessions, the loop is stateless: no `session_id` injection, no next-step hint enrichment, no ordering of a setup call before siblings. If you add a new tool, just add a case to the `dispatchTool` switch.
 
-Tool calls within a single batch are dispatched **sequentially** in the order the model emitted them. The smaller models in the picker frequently batch `get_current_code` + `set_code` + `get_blocks_image` in one turn intending strict ordering; running them in parallel races — a 17ms `get_blocks_image` returns before the ~2s `set_code` ingest commits, so blocks render against the pre-set state and throw `EMPTY_EDITOR_ERROR`. Inference cost dwarfs executor latency, so serialisation is essentially free. Do not reintroduce `Promise.all` here.
+Tool calls within a single batch are dispatched **sequentially** in the order the model emitted them. The smaller models in the picker frequently batch `session_get_code` + `session_set_code` + `session_get_blocks_img` in one turn intending strict ordering; running them in parallel races — a 17ms `session_get_blocks_img` returns before the ~2s `session_set_code` ingest commits, so blocks render against the pre-set state and throw `EMPTY_EDITOR_ERROR`. Inference cost dwarfs executor latency, so serialisation is essentially free. Do not reintroduce `Promise.all` here.
 
 ### System prompt
 
 The system prompt must tell the LLM:
 - It is a micro:bit coding assistant
-- The MakeCode editor on the right is stateful across the conversation — code loaded via `set_code` persists for later calls like `get_blocks_image` and `get_hex_file`
-- `set_code` followed by `get_blocks_image` is a valid multi-turn pattern (the PNG renders inline in the chat)
-- `get_blocks_image_from_code` is self-contained — use it to preview a snippet without touching the editor
+- The MakeCode editor on the right is stateful across the conversation — code loaded via `session_set_code` persists for later calls like `session_get_blocks_img` and `session_get_hex_file`
+- `session_set_code` followed by `session_get_blocks_img` is a valid multi-turn pattern (the PNG renders inline in the chat)
+- `get_blocks_img_from_code` is self-contained — use it to preview a snippet without touching the editor
 - Code should be valid MakeCode TypeScript (not standard Node.js TypeScript)
 
-The browser prompt must not mention `start_session` / `end_session` / `session_id` — those belong to the server target and are irrelevant here.
+The browser prompt must not mention `session_start` / `session_end` / `session_id` — those belong to the server target and are irrelevant here.
 
 
 ## What Not To Do

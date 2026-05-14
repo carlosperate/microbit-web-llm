@@ -63,10 +63,8 @@ export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessa
         }
       }
     }
-    // WebLLM's `ContentTypeError` requires assistant `content` to be a string,
-    // even when `tool_calls` is present. Use "" rather than null for tool-only
-    // turns so subsequent inferences don't fail with
-    // "assistant's message should have string content."
+    // WebLLM's ContentTypeError requires assistant `content` to be a string
+    // even when `tool_calls` is present — use "" not null for tool-only turns.
     out.push({
       role: "assistant",
       content: assistantText,
@@ -178,7 +176,7 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
             // Render a blocks-image tool result inline as an image part so
             // the user sees the rendered blocks alongside the call card.
             // Mirrors what the MCP server emits as `image` content blocks.
-            if (!ev.isError && IMAGE_TOOL_NAMES.has(ev.name as never)) {
+            if (!ev.isError && IMAGE_TOOL_NAMES.has(ev.name)) {
               const png = pngFromResult(ev.result);
               if (png) parts.push({ type: "image", image: `data:image/png;base64,${png}` });
             }

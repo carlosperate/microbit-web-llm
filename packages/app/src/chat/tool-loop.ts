@@ -68,11 +68,10 @@ interface PendingToolCall {
   arguments: string;
 }
 
-// The constrained-decoding path in webllm-engine emits every tool call in a
-// single synthetic delta with full id + arguments — no per-call streaming —
-// so we just collect deltas as-is. If a future model uses native streamed
-// tool-call deltas (partial arguments per chunk, keyed by index), this needs
-// to grow back into an index-keyed accumulator.
+// Constrained decoding emits each tool call as one synthetic delta with full
+// id + arguments — no per-call streaming, so we just collect as-is. If a
+// future model uses native streamed deltas (partial args per chunk, keyed by
+// index), restore an index-keyed accumulator.
 function collectToolCalls(
   out: PendingToolCall[],
   deltas: NonNullable<StreamChunk["choices"][0]["delta"]["tool_calls"]>,
@@ -86,10 +85,8 @@ function collectToolCalls(
   }
 }
 
-// Stateful tools (acting on the editor) that count as actually advancing the
-// user's request. Used by the stall-retry heuristic: if the model emits []
-// before any of these have fired, we nudge it once instead of falling back to
-// a tools-disabled plain-text reply.
+// Tools that count as advancing the user's request. The stall-retry heuristic
+// nudges the model once if it emits [] before any of these fire.
 const SUBSTANTIVE_TOOLS: ReadonlySet<string> = new Set<BrowserToolName>([
   TOOL.SESSION_SET_CODE,
   TOOL.SESSION_GET_CODE,
@@ -98,10 +95,8 @@ const SUBSTANTIVE_TOOLS: ReadonlySet<string> = new Set<BrowserToolName>([
   TOOL.GET_BLOCKS_IMG_FROM_CODE,
 ]);
 
-// Fires once if the model stalls (emits []) before doing any substantive work.
-// Typical failure mode: user asks for a program, model replies in plain text
-// describing the tool calls inside a TypeScript code block instead of
-// actually calling them.
+// Injected once if the model stalls (emits []) before any substantive call —
+// typical failure mode is describing the calls inside a TS code block.
 const STALL_REMINDER = `[workflow reminder] If the user asked you to create, write, load, or modify a program for the micro:bit, the task requires tool calls — emit them now. Typical sequence: ${TOOL.SESSION_SET_CODE} with the program, then ${TOOL.SESSION_GET_BLOCKS_IMG} to show the blocks. Do NOT describe the tool calls in plain text or inside a TypeScript code block — the student cannot execute them; only your actual tool_calls take effect. Only emit [] if the user's message is purely conversational and no tool action is needed.`;
 
 async function dispatchTool(
@@ -123,23 +118,26 @@ async function dispatchTool(
       return JSON.stringify(
         await executor.getBlocksImageFromCode(args.code as string),
       );
-    default: {
-      // Exhaustiveness check: if a new BrowserToolName is added without a case
-      // above, TS flags this assignment. The runtime throw covers bogus names
-      // the model might emit from outside the allowed set.
-      const _exhaustive: never = name as never;
-      void _exhaustive;
+    default:
       throw new Error(`Unknown tool: ${name}`);
-    }
   }
 }
 
-function parseArgs(raw: string): Record<string, unknown> {
-  if (!raw) return {};
+type ParsedArgs =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; error: string };
+
+function parseArgs(raw: string): ParsedArgs {
+  if (!raw) return { ok: true, args: {} };
   try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, error: `Expected a JSON object for arguments, got ${typeof parsed}.` };
+    }
+    return { ok: true, args: parsed as Record<string, unknown> };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg };
   }
 }
 
@@ -156,9 +154,8 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
   const maxSteps = opts.maxSteps ?? 10;
   const history: OpenAIMessage[] = [...opts.messages];
 
-  // Stream a tools-disabled completion, yielding text deltas. Used whenever
-  // the loop terminates: the model emitted [] (its done-signal), or repeat
-  // calls forced an early exit. Caller is responsible for logging the reason.
+  // Tools-disabled completion, streaming text deltas. Used on every loop
+  // exit (done-signal, stall fallback, repeat-call short-circuit).
   async function* plainTextFollowUp(label: string): AsyncIterable<ToolLoopEvent> {
     const followUp = await completion({ messages: history, tools: [], signal, options: completionOptions });
     let text = "";
@@ -172,15 +169,13 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
     }
     log.info(`plain-text follow-up complete (${label})`, { chars: text.length, preview: preview(text) });
   }
-  // Fires at most once per run: when the model stalls (emits []) before doing
-  // any substantive work, inject a reminder and retry instead of falling back
-  // to a tools-disabled plain-text reply.
+  // Set once if the model stalls (emits []) before any substantive call;
+  // gates the one-shot STALL_REMINDER retry below.
   let stallRetried = false;
 
-  // Track every (name + args) we've actually dispatched this run. The smaller
-  // models in the picker sometimes ignore the system-prompt rule "never call
-  // the same tool twice" and lock into a single-tool loop (e.g. session_get_code
-  // every step). A deterministic guard here cuts the loop short.
+  // Track every dispatched (name + args). Smaller models sometimes ignore the
+  // "never call the same tool twice" rule and lock into a single-tool loop
+  // (e.g. session_get_code every step) — this deterministic guard cuts it short.
   const seenCalls = new Set<string>();
   const callKey = (c: PendingToolCall) => `${c.name}:${c.arguments || "{}"}`;
 
@@ -226,9 +221,8 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         if (stalled) {
           stallRetried = true;
           log.warn("empty tool_calls before any substantive work → injecting STALL_REMINDER and retrying");
-          // Merge into the leading system message rather than pushing a new
-          // system mid-history — WebLLM's native tool-calling path rejects
-          // non-first system messages (SystemMessageOrderError).
+          // Merge into the leading system message; WebLLM's native path
+          // rejects non-first system messages (SystemMessageOrderError).
           if (history[0]?.role === "system") {
             history[0] = { role: "system", content: `${history[0].content}\n\n${STALL_REMINDER}` };
           } else {
@@ -243,10 +237,8 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
 
       if (finish === "tool_calls" || pending.length > 0) {
         const calls = pending;
-        // If every call in this batch is a repeat of one we already dispatched,
-        // the model is stuck — drop into the plain-text follow-up so the user
-        // gets an explanation instead of watching us hammer the same tool until
-        // maxSteps trips.
+        // Every call is a repeat — model is stuck. Drop into plain-text
+        // follow-up instead of hammering the same tool until maxSteps trips.
         if (calls.every((c) => seenCalls.has(callKey(c)))) {
           log.warn(
             `step ${step + 1}: every requested call is a repeat (${calls.map((c) => c.name).join(", ")}) → forcing plain-text follow-up`,
@@ -268,16 +260,24 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
           })),
         });
 
-        type DispatchResult = { call: PendingToolCall; args: Record<string, unknown>; result: string; isError: boolean };
+        type DispatchResult = { call: PendingToolCall; args: unknown; result: string; isError: boolean };
 
-        // Run sequentially in the order the model emitted them. The model
-        // frequently batches session_set_code + session_get_blocks_img (sometimes preceded
-        // by session_get_code) in one turn, intending strict ordering. Running
-        // them in parallel races: a fast read finishes before the slow
-        // setCode commits and the editor still looks empty.
+        // Sequential, in emission order. Models batch session_set_code +
+        // session_get_blocks_img intending strict ordering; parallel races —
+        // a fast read finishes before the slow setCode commits and the editor
+        // still looks empty.
         const results: DispatchResult[] = [];
         for (const c of calls) {
-          const args = parseArgs(c.arguments);
+          const parsed = parseArgs(c.arguments);
+          if (!parsed.ok) {
+            // Surface as a tool error so the model can re-emit valid args
+            // next turn, instead of coercing to {} and exploding downstream.
+            const msg = `Invalid JSON arguments for ${c.name}: ${parsed.error}. Re-emit the call with a valid JSON object.`;
+            log.warn(`  ✗ ${c.name} arg parse failed: ${parsed.error}`, { raw: preview(c.arguments) });
+            results.push({ call: c, args: c.arguments, result: msg, isError: true });
+            continue;
+          }
+          const args = parsed.args;
           log.info(`  → ${c.name}(${preview(args)})`);
           const endCall = log.time(`  ← ${c.name}`);
           try {

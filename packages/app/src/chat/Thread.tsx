@@ -139,7 +139,7 @@ function ToolCallView({
   isError?: boolean;
 }) {
   const resultText = result === undefined ? null : typeof result === "string" ? result : JSON.stringify(result);
-  const isImageTool = !isError && IMAGE_TOOL_NAMES.has(toolName as never);
+  const isImageTool = !isError && IMAGE_TOOL_NAMES.has(toolName);
   const isPending = result === undefined && !isError;
 
   return (

@@ -17,10 +17,8 @@ export interface ToolDescriptor {
 }
 
 // ─── Tool-name constants ────────────────────────────────────────────────────
-// Single source of truth for every tool identifier. Every consumer (this file
-// included) references these constants instead of repeating the literal —
-// renaming a tool is a one-line change here, and TypeScript narrowing on the
-// `*ToolName` unions catches typos at build time.
+// Single source of truth for every tool identifier. Renaming a tool is a
+// one-line change here; the `*ToolName` unions catch typos at build time.
 
 export const TOOL = {
   SESSION_START: "session_start",
@@ -35,15 +33,15 @@ export const TOOL = {
 
 export type ToolName = (typeof TOOL)[keyof typeof TOOL];
 
-// Image-producing tools (PNG base64 result). Consumers that need to render
-// the result inline or stub it in flattened history use this set.
-export const IMAGE_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
+// Image-producing tools (PNG base64 result). Typed as ReadonlySet<string> so
+// callers can `.has(name)` on a plain string without `as never` casts.
+export const IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set<ToolName>([
   TOOL.SESSION_GET_BLOCKS_IMG,
   TOOL.GET_BLOCKS_IMG_FROM_CODE,
 ]);
 
 // Hex-producing tools (binary opaque result). Same role as IMAGE_TOOL_NAMES.
-export const HEX_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
+export const HEX_TOOL_NAMES: ReadonlySet<string> = new Set<ToolName>([
   TOOL.SESSION_GET_HEX_FILE,
   TOOL.GET_HEX_FILE_FROM_CODE,
 ]);
@@ -62,10 +60,8 @@ const loadedBrowserHint = `The editor must already have code loaded (via ${TOOL.
 const loadedServerHint = `The editor must already have code loaded (via ${TOOL.SESSION_SET_CODE}) in this session.`;
 
 // ─── Browser target ─────────────────────────────────────────────────────────
-// One executor per iframe; the iframe *is* the session. No start/end lifecycle,
-// no session_id on any tool. Stateful tools (SESSION_SET_CODE, SESSION_GET_CODE,
-// SESSION_GET_BLOCKS_IMG, SESSION_GET_HEX_FILE) act on the iframe's current
-// state directly.
+// One executor per iframe; the iframe *is* the session. No start/end
+// lifecycle, no session_id on any tool — stateful tools act on the iframe directly.
 
 export const BROWSER_TOOL_NAMES = [
   TOOL.SESSION_GET_CODE,
@@ -150,10 +146,9 @@ export const browserTools: ToolDescriptor[] = [
 export const browserToolNames = browserTools.map((t) => t.function.name);
 
 // ─── Server target ──────────────────────────────────────────────────────────
-// A single MCP server can multiplex many LLM clients, so sessions are
-// first-class. We define each tool as a Zod input shape + description, then
-// derive the JSON Schema descriptors from the same shapes (single source of
-// truth) and feed the raw shapes straight into McpServer.registerTool.
+// A single MCP server multiplexes many LLM clients, so sessions are
+// first-class. Each tool is a Zod input shape + description; the JSON Schema
+// descriptors are derived from the same shapes (one source of truth).
 
 const sessionIdField = z
   .string()
@@ -163,9 +158,9 @@ const sessionIdField = z
 
 const codeField = z.string().describe("MakeCode TypeScript source.");
 
-export interface ServerToolMeta<Shape extends z.ZodRawShape = z.ZodRawShape> {
+export interface ServerToolMeta {
   description: string;
-  inputShape: Shape;
+  inputShape: z.ZodRawShape;
 }
 
 export const serverToolMeta = {
