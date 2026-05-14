@@ -6,7 +6,6 @@ import type {
   StartSessionResult,
 } from "../shared/types.js";
 import { SessionError } from "../shared/types.js";
-import { fillProjectDefaults } from "../shared/project-defaults.js";
 import { TOOL } from "../shared/tools.js";
 import {
   readCurrentCode,
@@ -72,15 +71,22 @@ export class TabExecutor implements ServerExecutor {
   }
 
   async getBlocksImageFromCode(code: string): Promise<BlocksImage> {
-    const pngBase64 = await this.pool.renderBlocksImage(code);
-    return { pngBase64 };
+    return this.pool.withStatelessTab(async (d) => {
+      // writeCode → setProject — same path session_set_code uses, so the
+      // editor's decompile-confirm-wait detects TS that doesn't compile and
+      // throws. Valid TS that can't decompile to blocks passes (the editor
+      // still emits a post-switchBlocks workspacesave for it).
+      await writeCode(d, code);
+      // renderCurrentBlocks reads main.ts back and pipes it through the same
+      // standalone renderer the session path uses, so the grey "raw text"
+      // block falls out automatically for valid-but-undecompilable code.
+      return renderCurrentBlocks(d);
+    });
   }
 
   async getHexFileFromCode(code: string): Promise<string> {
-    return this.pool.withTransientTab(async (d) => {
-      await d.setProject({
-        text: { ...fillProjectDefaults({}, code), "main.blocks": "" },
-      });
+    return this.pool.withStatelessTab(async (d) => {
+      await writeCode(d, code);
       const { hex } = await d.compile();
       return toBase64(hex);
     });

@@ -14,13 +14,13 @@ export interface OpenTabOptions {
 
 export interface TabPool {
   openTab(opts?: OpenTabOptions): Promise<TabHandle>;
-  withTransientTab<T>(fn: (driver: MakeCodeDriver) => Promise<T>): Promise<T>;
   /**
-   * Render-only path for stateless block image rendering. Backed by a
-   * persistent tab that loads only `createMakeCodeRenderBlocks` — no editor
-   * iframe — so calls are near-instant and don't pay the makecode.microbit.org
-   * load cost on every invocation.
+   * Serialized access to a shared persistent "stateless" editor tab used by
+   * the `*_from_code` tools. Loading MakeCode is slow (potentially minutes on
+   * a fresh cache + slow connection), so we pay that cost once at server
+   * startup and reuse the tab for every stateless call. Calls serialize on a
+   * per-pool mutex so the editor's single-project state can't race.
    */
-  renderBlocksImage(code: string): Promise<string>;
+  withStatelessTab<T>(fn: (driver: MakeCodeDriver) => Promise<T>): Promise<T>;
   dispose(): Promise<void>;
 }

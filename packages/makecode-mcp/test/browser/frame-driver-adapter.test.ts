@@ -107,14 +107,19 @@ describe("MakeCodeFrameDriverAdapter", () => {
     expect(project.text).toEqual(FILES);
   });
 
-  it("getProject caches the most recent save and returns it without triggering saveProject", async () => {
+  it("getProject always issues saveProject (no cached short-circuit)", async () => {
+    // The adapter no longer caches the last save — every read is a fresh
+    // workspacesave round-trip so user/editor edits between turns aren't
+    // hidden behind stale state.
     adapter.handleWorkspaceSave({ project: { header: HEADER, text: FILES } });
-    const project = await adapter.getProject();
-    expect(project.text).toEqual(FILES);
-    expect(driver.saveProject).not.toHaveBeenCalled();
+    const pending = adapter.getProject();
+    await Promise.resolve();
+    expect(driver.saveProject).toHaveBeenCalledOnce();
+    adapter.handleWorkspaceSave({ project: { header: HEADER, text: FILES } });
+    await expect(pending).resolves.toEqual({ text: FILES });
   });
 
-  it("setProject calls importProject with merged text and the current header", async () => {
+  it("setProject calls importProject with the imported text and the current header", async () => {
     adapter.handleWorkspaceSave({ project: { header: HEADER, text: FILES } });
     await adapter.setProject({ text: { ...FILES, "main.ts": "new code" } });
     expect(driver.importProject).toHaveBeenCalledOnce();
@@ -149,10 +154,15 @@ describe("MakeCodeFrameDriverAdapter", () => {
     expect(out).toBe('png(<svg width="40" height="20">basic.showNumber(1)</svg>)');
   });
 
-  it("renderBlocksImage returns empty string when svg is undefined", async () => {
+  it("renderBlocksImage throws when makecode-embed can't decompile the TS (was silently returning '' before)", async () => {
+    // Silent empty PNG hid the failure from the model — `get_blocks_img_from_code`
+    // would resolve with a 0-byte image and isError:false. Surfacing as a
+    // throw lets MCP's safe() wrapper return isError:true with an actionable
+    // message, matching what session_set_code already does on decompile fail.
     mockRenderBlocks.mockResolvedValueOnce({});
-    const out = await adapter.renderBlocksImage("x");
-    expect(out).toBe("");
+    await expect(adapter.renderBlocksImage("x")).rejects.toThrow(
+      /could not be compiled into blocks/i,
+    );
   });
 
   it("renderBlocksImage forwards the optional scale to svgToPngBase64", async () => {
@@ -184,15 +194,6 @@ describe("MakeCodeFrameDriverAdapter", () => {
     const [r1, r2] = await Promise.all([p1, p2]);
     expect(r1.text).toEqual(FILES);
     expect(r2.text).toEqual(FILES);
-  });
-
-  it("setProject updates the cache so an immediate getProject returns the new state", async () => {
-    const newFiles = { ...FILES, "main.ts": "basic.clearScreen()" };
-    await adapter.setProject({ text: newFiles });
-    const project = await adapter.getProject();
-    expect(project.text["main.ts"]).toBe("basic.clearScreen()");
-    // No saveProject needed — the optimistic cache was hit.
-    expect(driver.saveProject).not.toHaveBeenCalled();
   });
 
   it("header-only workspaceSave does not drain pending getProject waiters", async () => {
@@ -251,7 +252,7 @@ describe("MakeCodeFrameDriverAdapter", () => {
       const settled = pending.catch((e) => e);
       // Let the import + switchBlocks promises resolve before advancing timers.
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(1_500);
       const result = await settled;
       expect(result).toBeInstanceOf(Error);
       expect((result as Error).message).toMatch(
@@ -315,21 +316,6 @@ describe("MakeCodeFrameDriverAdapter", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("workspacesave events merge into the cache instead of replacing", async () => {
-    // After setProject, MakeCode may fire follow-up workspacesave events
-    // carrying only the fields it just changed (e.g. main.blocks after a
-    // view switch). Replacing the cache wholesale would drop the main.ts we
-    // just imported and make the very next session_get_blocks_img throw
-    // EMPTY_EDITOR_ERROR even though the editor still has the code.
-    await adapter.setProject({ text: { ...FILES, "main.ts": "basic.showNumber(7)" } });
-    adapter.handleWorkspaceSave({
-      project: { header: HEADER, text: { "main.blocks": "<xml>new</xml>" } },
-    });
-    const project = await adapter.getProject();
-    expect(project.text["main.ts"]).toBe("basic.showNumber(7)");
-    expect(project.text["main.blocks"]).toBe("<xml>new</xml>");
   });
 
   it("compile rejects a second concurrent call with a clear error", async () => {

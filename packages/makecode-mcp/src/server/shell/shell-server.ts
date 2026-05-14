@@ -10,9 +10,7 @@ import esbuild from "esbuild";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHELL_SRC = resolve(HERE, "..", "..", "..", "src", "server", "shell");
 const SHIM_ENTRY = resolve(SHELL_SRC, "shim.ts");
-const RENDER_SHIM_ENTRY = resolve(SHELL_SRC, "render-shim.ts");
 const SHELL_HTML = resolve(SHELL_SRC, "shell.html");
-const RENDER_HTML = resolve(SHELL_SRC, "render.html");
 
 const bundles = new Map<string, string>();
 async function bundle(entry: string): Promise<string> {
@@ -34,26 +32,16 @@ async function bundle(entry: string): Promise<string> {
 
 export interface ShellServer {
   url: string;
-  renderUrl: string;
   close(): Promise<void>;
 }
 
 export async function startShellServer(): Promise<ShellServer> {
   const shellHtml = readFileSync(SHELL_HTML, "utf8");
-  const renderHtml = readFileSync(RENDER_HTML, "utf8");
-  const [shim, renderShim] = await Promise.all([
-    bundle(SHIM_ENTRY),
-    bundle(RENDER_SHIM_ENTRY),
-  ]);
+  const shim = await bundle(SHIM_ENTRY);
   const routes: Record<string, { body: string; type: string }> = {
     "/": { body: shellHtml, type: "text/html; charset=utf-8" },
     "/shell.html": { body: shellHtml, type: "text/html; charset=utf-8" },
     "/shim.js": { body: shim, type: "application/javascript; charset=utf-8" },
-    "/render.html": { body: renderHtml, type: "text/html; charset=utf-8" },
-    "/render-shim.js": {
-      body: renderShim,
-      type: "application/javascript; charset=utf-8",
-    },
   };
   return await new Promise((res) => {
     const server: Server = createServer((req, reply) => {
@@ -76,7 +64,6 @@ export async function startShellServer(): Promise<ShellServer> {
       const base = `http://127.0.0.1:${addr.port}`;
       res({
         url: `${base}/shell.html`,
-        renderUrl: `${base}/render.html`,
         close: () =>
           new Promise<void>((r) => {
             server.close(() => r());

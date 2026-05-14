@@ -9,7 +9,6 @@ import type {
 vi.mock("../../src/server/shell/shell-server.js", () => ({
   startShellServer: vi.fn(async () => ({
     url: "http://127.0.0.1:0/shell.html",
-    renderUrl: "http://127.0.0.1:0/render.html",
     close: async () => {},
   })),
 }));
@@ -94,7 +93,6 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     resolveReady();
     await openP;
     expect(resolved).toBe(true);
-    // The ready check should have been evaluated against window.__mkcp.ready().
     const page = sessionPool.pages[0];
     expect(page.evaluate).toHaveBeenCalled();
     const firstArg = (page.evaluate as MockedFunction<(...a: unknown[]) => Promise<unknown>>).mock.calls[0][0];
@@ -136,7 +134,6 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     await pool.openTab();
 
     expect(sessionPool.openWindow).toHaveBeenCalledTimes(2);
-    // Both calls receive the shell URL
     const urls = sessionPool.openWindow.mock.calls.map((c) => c[0]);
     expect(urls.every((u) => typeof u === "string" && u.includes("shell"))).toBe(
       true,
@@ -144,13 +141,12 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(sessionPool.openPage).not.toHaveBeenCalled();
   });
 
-  it("prewarmRender opens the render page in the render pool eagerly", async () => {
+  it("prewarm opens the stateless editor tab in the render pool eagerly", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();
     const pool = new PuppeteerTabPool({ renderPool, sessionPool });
 
-    pool.prewarmRender();
-    // Allow the microtask that triggers openPage to run.
+    pool.prewarm();
     await new Promise((r) => setTimeout(r, 0));
 
     expect(renderPool.openPage).toHaveBeenCalledOnce();
@@ -158,63 +154,97 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(sessionPool.openWindow).not.toHaveBeenCalled();
   });
 
-  it("prewarmRender is idempotent — repeated calls reuse the same render page", async () => {
+  it("prewarm is idempotent — repeated calls reuse the same stateless tab", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();
     const pool = new PuppeteerTabPool({ renderPool, sessionPool });
 
-    pool.prewarmRender();
-    pool.prewarmRender();
-    await pool.renderBlocksImage("code");
+    pool.prewarm();
+    pool.prewarm();
+    await pool.withStatelessTab(async () => "ok");
 
     expect(renderPool.openPage).toHaveBeenCalledOnce();
   });
 
-  it("prewarmRender failures do not propagate and a later call retries", async () => {
+  it("prewarm failures do not propagate and a later call retries", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();
     renderPool.openPage.mockRejectedValueOnce(new Error("boom"));
     const pool = new PuppeteerTabPool({ renderPool, sessionPool });
 
-    expect(() => pool.prewarmRender()).not.toThrow();
+    expect(() => pool.prewarm()).not.toThrow();
     await new Promise((r) => setTimeout(r, 0));
 
-    // After the prewarm error is observed, a later renderBlocksImage call
-    // should re-open the page rather than reuse the rejected promise.
-    await pool.renderBlocksImage("code");
+    await pool.withStatelessTab(async () => "ok");
     expect(renderPool.openPage).toHaveBeenCalledTimes(2);
   });
 
-  it("renderBlocksImage uses the render pool, not the session pool", async () => {
+  it("withStatelessTab uses the render pool, not the session pool", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();
-    // Render page evaluate returns a base64 string.
-    renderPool.openPage.mockImplementationOnce(async () => {
-      const p = makePage();
-      (p.evaluate as MockedFunction<() => Promise<unknown>>).mockResolvedValue(
-        "PNGBASE64",
-      );
-      renderPool.pages.push(p);
-      return p;
-    });
     const pool = new PuppeteerTabPool({ renderPool, sessionPool });
 
-    const out = await pool.renderBlocksImage("code");
+    await pool.withStatelessTab(async () => "ok");
 
-    expect(out).toBe("PNGBASE64");
     expect(renderPool.openPage).toHaveBeenCalledOnce();
     expect(sessionPool.openPage).not.toHaveBeenCalled();
   });
 
-  it("withTransientTab uses the render pool, not the session pool", async () => {
+  it("withStatelessTab reuses the same persistent page across calls (no per-call reopen)", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();
     const pool = new PuppeteerTabPool({ renderPool, sessionPool });
 
-    await pool.withTransientTab(async () => "ok");
+    await pool.withStatelessTab(async () => "a");
+    await pool.withStatelessTab(async () => "b");
+    await pool.withStatelessTab(async () => "c");
 
+    // One openPage for the persistent tab, reused for every call.
     expect(renderPool.openPage).toHaveBeenCalledOnce();
-    expect(sessionPool.openPage).not.toHaveBeenCalled();
+  });
+
+  it("withStatelessTab serialises concurrent calls so the editor's single-project state can't race", async () => {
+    // Two concurrent calls must run sequentially. We verify by latching:
+    // the second call must not start until the first releases.
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    const order: string[] = [];
+    let release1!: () => void;
+    const inflight1 = new Promise<void>((r) => (release1 = r));
+    const p1 = pool.withStatelessTab(async () => {
+      order.push("1:enter");
+      await inflight1;
+      order.push("1:exit");
+      return "1";
+    });
+    // Give p1 a microtask to start.
+    await Promise.resolve();
+    const p2 = pool.withStatelessTab(async () => {
+      order.push("2:enter");
+      return "2";
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    // p2 must not have entered yet.
+    expect(order).toEqual(["1:enter"]);
+    release1();
+    await Promise.all([p1, p2]);
+    expect(order).toEqual(["1:enter", "1:exit", "2:enter"]);
+  });
+
+  it("withStatelessTab still releases the lock if the user fn throws", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    await expect(
+      pool.withStatelessTab(async () => {
+        throw new Error("user fn fail");
+      }),
+    ).rejects.toThrow(/user fn fail/);
+    // Subsequent call must still proceed (lock was released).
+    await expect(pool.withStatelessTab(async () => "ok")).resolves.toBe("ok");
   });
 
   it("dispose disposes both pools", async () => {

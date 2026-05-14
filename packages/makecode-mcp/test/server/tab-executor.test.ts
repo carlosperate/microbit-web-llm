@@ -10,16 +10,25 @@ type DriverMocks = {
 };
 
 function makeDriver(): DriverMocks {
+  // Mirror real adapter behaviour: a successful setProject is observable via
+  // the next getProject (in production it round-trips via MakeCode; here we
+  // just remember the last project so reads after writes see the new state).
+  // Initial state mirrors what a freshly-loaded MakeCode editor reports:
+  // pxt.json carries preferredEditor:blocksprj, main.blocks is the empty
+  // <variables/> stub, main.ts is empty.
+  let project: { text: Record<string, string> } = {
+    text: {
+      "main.ts": "",
+      "main.blocks": '<xml xmlns="http://www.w3.org/1999/xhtml"><variables></variables></xml>',
+      "pxt.json": JSON.stringify({ name: "Untitled", preferredEditor: "blocksprj" }),
+      "README.md": " ",
+    },
+  };
   return {
-    getProject: vi.fn(async () => ({
-      text: {
-        "main.ts": "",
-        "main.blocks": "",
-        "pxt.json": "{}",
-        "README.md": " ",
-      },
-    })),
-    setProject: vi.fn(async () => {}),
+    getProject: vi.fn(async () => project),
+    setProject: vi.fn(async (p) => {
+      project = { text: { ...p.text } };
+    }),
     compile: vi.fn(async () => ({
       name: "microbit",
       hex: ":020000040000FA\n:00000001FF\n",
@@ -33,7 +42,7 @@ function makePool() {
     driver: DriverMocks;
     close: MockedFunction<() => Promise<void>>;
   }> = [];
-  const transientDrivers: DriverMocks[] = [];
+  const statelessDrivers: DriverMocks[] = [];
   const pool: TabPool = {
     openTab: vi.fn(async (): Promise<TabHandle> => {
       const driver = makeDriver();
@@ -41,15 +50,14 @@ function makePool() {
       handles.push({ driver, close });
       return { driver, close };
     }),
-    withTransientTab: vi.fn(async <T>(fn: (d: MakeCodeDriver) => Promise<T>) => {
+    withStatelessTab: vi.fn(async <T>(fn: (d: MakeCodeDriver) => Promise<T>) => {
       const driver = makeDriver();
-      transientDrivers.push(driver);
+      statelessDrivers.push(driver);
       return fn(driver);
     }),
-    renderBlocksImage: vi.fn(async (_code: string) => "iVBORw0KGgo="),
     dispose: vi.fn(async () => {}),
   };
-  return { pool, handles, transientDrivers };
+  return { pool, handles, statelessDrivers };
 }
 
 describe("TabExecutor — session lifecycle", () => {
@@ -181,25 +189,37 @@ describe("TabExecutor — stateful tools", () => {
 });
 
 describe("TabExecutor — stateless _from_code tools", () => {
-  it("getBlocksImageFromCode uses the pool's render-only path, not a session or transient tab", async () => {
-    const { pool, handles } = makePool();
+  it("getBlocksImageFromCode goes through the stateless tab so editor-side TS validation applies", async () => {
+    // Previously this routed through a render-only tab with no editor, so TS
+    // that didn't compile silently produced a "raw text" fallback PNG. The
+    // stateless-tab path uses the same setProject + decompile-confirm flow as
+    // session_set_code, so a bad TS throw bubbles up here too.
+    const { pool, statelessDrivers, handles } = makePool();
+    statelessDrivers; // ensures the lazy capture is set up before we read it
     const exec = new TabExecutor(pool);
+    // Make renderBlocksImage return code-specific bytes so we can confirm the
+    // executor reads main.ts back and pipes it through the driver renderer.
     const img = await exec.getBlocksImageFromCode('basic.showString("hi")');
-    expect(img).toEqual({ pngBase64: "iVBORw0KGgo=" });
+    expect(pool.withStatelessTab).toHaveBeenCalledOnce();
     expect(pool.openTab).not.toHaveBeenCalled();
-    expect(pool.withTransientTab).not.toHaveBeenCalled();
-    expect(pool.renderBlocksImage).toHaveBeenCalledWith(
+    expect(handles).toHaveLength(0);
+    const d = statelessDrivers[0];
+    // setProject validates the TS via the editor's decompile-confirm flow.
+    expect(d.setProject).toHaveBeenCalledOnce();
+    expect(d.setProject.mock.calls[0][0].text["main.ts"]).toBe(
       'basic.showString("hi")',
     );
-    expect(handles).toHaveLength(0);
+    // Then the executor reads main.ts back and renders it.
+    expect(d.renderBlocksImage).toHaveBeenCalled();
+    expect(img.pngBase64).toBe("iVBORw0KGgo=");
   });
 
-  it("getHexFileFromCode loads code in a transient tab, compiles, returns base64", async () => {
-    const { pool, transientDrivers } = makePool();
+  it("getHexFileFromCode loads code on the stateless tab, compiles, returns base64", async () => {
+    const { pool, statelessDrivers } = makePool();
     const exec = new TabExecutor(pool);
     const out = await exec.getHexFileFromCode('basic.showString("hi")');
-    expect(pool.withTransientTab).toHaveBeenCalledOnce();
-    const d = transientDrivers[0];
+    expect(pool.withStatelessTab).toHaveBeenCalledOnce();
+    const d = statelessDrivers[0];
     expect(d.setProject).toHaveBeenCalledOnce();
     const arg = d.setProject.mock.calls[0][0];
     expect(arg.text["main.ts"]).toBe('basic.showString("hi")');

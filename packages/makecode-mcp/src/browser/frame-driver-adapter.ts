@@ -26,8 +26,10 @@ const COMPILE_TIMEOUT_MS = 120_000;
 // completes). When decompile silently fails — `switchblocks` still replies
 // `success:true` but the editor falls back to JS view behind a modal — no
 // further workspacesave events arrive at all. Time-boxing the wait turns that
-// silence into a recoverable error the model can act on.
-const DECOMPILE_CONFIRM_TIMEOUT_MS = 5_000;
+// silence into a recoverable error the model can act on. Observed good-case
+// latency is ~270 ms (in-iframe CPU only — no network); 1.5 s leaves ~5×
+// headroom while keeping the failure path snappy for the LLM tool loop.
+const DECOMPILE_CONFIRM_TIMEOUT_MS = 1_500;
 
 // MakeCode rejects switchBlocks with editor-side diagnostic strings when the
 // TypeScript can't be decompiled to blocks. Transient failures (transport
@@ -55,7 +57,6 @@ interface FrameDriverLike {
 
 export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   private latestHeader: unknown;
-  private latestFiles: MakeCodeProjectFiles | undefined;
   private pendingSaveCallbacks: Array<(p: MakeCodeProjectFiles) => void> = [];
   private pendingDownload: ((d: DownloadEvent) => void) | null = null;
   private compileInFlight = false;
@@ -83,16 +84,7 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     // those — they'd resolve {} and downstream reads see an empty main.ts.
     const text = event.project.text;
     if (!text) return;
-    // Merge incoming text fields into the cache rather than replacing.
-    // workspacesave events arrive with partial text (e.g. only main.blocks
-    // after a view switch following importProject); replacing wholesale would
-    // drop the main.ts we just imported and trip EMPTY_EDITOR_ERROR.
-    const merged: Record<string, string> = {
-      ...(this.latestFiles?.text ?? {}),
-      ...text,
-    };
-    const files: MakeCodeProjectFiles = { text: merged };
-    this.latestFiles = files;
+    const files: MakeCodeProjectFiles = { text };
     const callbacks = this.pendingSaveCallbacks.splice(0);
     for (const cb of callbacks) cb(files);
   }
@@ -104,7 +96,6 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   }
 
   async getProject(): Promise<MakeCodeProjectFiles> {
-    if (this.latestFiles) return this.latestFiles;
     const waiter = new Promise<MakeCodeProjectFiles>((res) => {
       this.pendingSaveCallbacks.push(res);
     });
@@ -116,21 +107,12 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   }
 
   async setProject(project: MakeCodeProjectFiles): Promise<void> {
-    // Optimistic cache update so a getProject() immediately after returns the new state.
-    const previous = this.latestFiles;
-    this.latestFiles = project;
-    try {
-      await this.driver.importProject({
-        project: {
-          ...(this.latestHeader ? { header: this.latestHeader } : {}),
-          text: project.text,
-        },
-      });
-    } catch (err) {
-      // Import never reached the editor — roll back the cache so reads don't lie.
-      this.latestFiles = previous;
-      throw err;
-    }
+    await this.driver.importProject({
+      project: {
+        ...(this.latestHeader ? { header: this.latestHeader } : {}),
+        text: project.text,
+      },
+    });
     // Importing with empty main.blocks lands the editor in JS view; force
     // blocks view so MakeCode decompiles main.ts. If decompile fails (invalid
     // TS), switchBlocks rejects — surface that so the model self-corrects
@@ -219,8 +201,16 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
 
   async renderBlocksImage(code: string, scale?: number): Promise<string> {
     const result = await this.getRenderer().renderBlocks({ code });
-    const svg = result.svg ?? "";
-    if (!svg) return "";
+    const svg = result.svg;
+    // makecode-embed returns `resp: undefined` when the standalone renderer
+    // can't compile the TS to blocks. Silently coercing to an empty PNG hid
+    // the failure from the model — surface it as a tool error so the LLM can
+    // fix the code instead of staring at a 0-byte image.
+    if (!svg) {
+      throw new Error(
+        "The code could not be compiled into blocks, fix any errors and try again.",
+      );
+    }
     return scale === undefined ? svgToPngBase64(svg) : svgToPngBase64(svg, scale);
   }
 }

@@ -19,7 +19,14 @@ export class PuppeteerTabPool implements TabPool {
   private readonly headed: boolean;
   private headedLogged = false;
   private shellPromise: Promise<ShellServer> | null = null;
-  private renderPagePromise: Promise<PageLike> | null = null;
+  // Persistent editor tab shared by all `*_from_code` calls. Loaded once at
+  // startup (loading MakeCode can take many seconds on cold cache / slow
+  // network, so reopening per-call is a non-starter) and reused thereafter.
+  private statelessPagePromise: Promise<PageLike> | null = null;
+  // Chained promise mutex serialising access to the stateless tab — the
+  // editor only holds one project at a time, so concurrent `*_from_code`
+  // calls would race on import/compile.
+  private statelessLock: Promise<unknown> = Promise.resolve();
 
   constructor(opts: PuppeteerTabPoolOptions) {
     this.renderPool = opts.renderPool;
@@ -50,42 +57,41 @@ export class PuppeteerTabPool implements TabPool {
     return this.sessionPool.openWindow(url.toString());
   }
 
-  private async openRenderShellPage(): Promise<PageLike> {
-    const [shell, page] = await Promise.all([
-      this.shell(),
-      this.renderPool.openPage(),
-    ]);
-    await page.goto(shell.url, { waitUntil: "domcontentloaded" });
-    return page;
-  }
-
-  private renderPage(): Promise<PageLike> {
-    if (!this.renderPagePromise) {
+  private statelessPage(): Promise<PageLike> {
+    if (!this.statelessPagePromise) {
       const p = (async () => {
         const [shell, page] = await Promise.all([
           this.shell(),
           this.renderPool.openPage(),
         ]);
-        await page.goto(shell.renderUrl, { waitUntil: "domcontentloaded" });
+        await page.goto(shell.url, { waitUntil: "domcontentloaded" });
+        // Block until the embedded editor finishes loading — `__mkcp.ready()`
+        // resolves on `onEditorContentLoaded`. Without this the first stateless
+        // call would itself trigger and wait for MakeCode to load.
+        const endReady = log.time("stateless tab: MakeCode editor ready");
+        try {
+          await page.evaluate(`window.__mkcp.ready()`);
+        } finally {
+          endReady();
+        }
         return page;
       })().catch((err) => {
-        if (this.renderPagePromise === p) this.renderPagePromise = null;
+        if (this.statelessPagePromise === p) this.statelessPagePromise = null;
         throw err;
       });
-      this.renderPagePromise = p;
+      this.statelessPagePromise = p;
     }
-    return this.renderPagePromise;
+    return this.statelessPagePromise;
   }
 
   /**
-   * Kick off render-tab loading without awaiting it. Used at MCP server
-   * startup so the makecode-embed renderer iframe (which has a hardcoded
-   * 30s `renderready` timeout) has the maximum possible time to load on
-   * slow connections before the first `get_blocks_img_from_code` call.
+   * Kick off stateless-tab loading without awaiting. Called at MCP startup so
+   * the editor (which can take minutes on cold cache / slow connection) has
+   * the maximum window to finish loading before the first `*_from_code` call.
    */
-  prewarmRender(): void {
-    this.renderPage().catch(() => {
-      // Swallow — next call to renderPage() will see the cleared promise
+  prewarm(): void {
+    this.statelessPage().catch(() => {
+      // Swallow — next call to statelessPage() will see the cleared promise
       // and retry.
     });
   }
@@ -105,36 +111,34 @@ export class PuppeteerTabPool implements TabPool {
     };
   }
 
-  async withTransientTab<T>(
+  async withStatelessTab<T>(
     fn: (driver: MakeCodeDriver) => Promise<T>,
   ): Promise<T> {
-    const page = await this.openRenderShellPage();
+    // Chain onto the lock so concurrent calls serialise. We capture the
+    // previous tail, install a new one, then wait for the previous tail to
+    // settle before running our turn. The `finally` releases the new tail
+    // regardless of fn's outcome so an error in one call doesn't deadlock the
+    // chain.
+    const previous = this.statelessLock;
+    let release!: () => void;
+    this.statelessLock = new Promise<void>((r) => {
+      release = r;
+    });
     try {
+      await previous.catch(() => {});
+      const page = await this.statelessPage();
       return await fn(new PuppeteerDriver(page));
     } finally {
-      await page.close().catch(() => {});
+      release();
     }
-  }
-
-  async renderBlocksImage(code: string): Promise<string> {
-    const page = await this.renderPage();
-    return page.evaluate(
-      (c: unknown) =>
-        (
-          window as unknown as {
-            __mkcp_render: { renderBlocksImage(c: unknown): Promise<string> };
-          }
-        ).__mkcp_render.renderBlocksImage(c),
-      code,
-    ) as Promise<string>;
   }
 
   async dispose(): Promise<void> {
     const shell = this.shellPromise;
-    const renderPage = this.renderPagePromise;
+    const statelessPage = this.statelessPagePromise;
     this.shellPromise = null;
-    this.renderPagePromise = null;
-    if (renderPage) await renderPage.then((p) => p.close()).catch(() => {});
+    this.statelessPagePromise = null;
+    if (statelessPage) await statelessPage.then((p) => p.close()).catch(() => {});
     await this.renderPool.dispose();
     await this.sessionPool.dispose();
     if (shell) await (await shell).close().catch(() => {});

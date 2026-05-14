@@ -29,11 +29,10 @@ async function main() {
   const sessionPool = new BrowserPool(launch(!headed));
   const pool = new PuppeteerTabPool({ renderPool, sessionPool, headed });
   const executor = new TabExecutor(pool);
-  // Start the render tab loading immediately. The makecode-embed renderer
-  // has a 30s `renderready` timeout from `initialize()`; doing this at MCP
-  // startup gives slow networks the most time before the first
-  // `get_blocks_img_from_code` call.
-  pool.prewarmRender();
+  // Start the stateless editor tab loading immediately — MakeCode can take
+  // many seconds on cold cache / slow networks, so prewarming gives the
+  // maximum window before the first *_from_code call.
+  pool.prewarm();
 
   const shutdown = async () => {
     await executor.dispose().catch(() => {});
