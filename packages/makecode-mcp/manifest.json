@@ -1,0 +1,46 @@
+{
+  "manifest_version": "0.2",
+  "name": "makecode-mcp",
+  "display_name": "MakeCode micro:bit",
+  "version": "0.0.0",
+  "description": "Drive a MakeCode micro:bit editor from your LLM: load TypeScript, render Blocks previews, and compile to a flashable .hex file.",
+  "long_description": "Runs a stdio MCP server that opens MakeCode micro:bit (https://makecode.microbit.org) in a Puppeteer-managed tab and exposes a small, stable tool surface for LLM tool-calling: start/end editor sessions, set/get code, render a Blocks PNG of the current editor (or a snippet), and compile to a base64 Universal Hex. Useful for teaching, demos, and programmatic micro:bit code generation. Requires Google Chrome (or Chromium) installed locally — the extension launches it automatically.",
+  "author": {
+    "name": "Carlos Pereira Atencio"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server/bin.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server/bin.js"],
+      "env": {
+        "MKCP_HEADED": "${user_config.headed_mode}",
+        "PUPPETEER_EXECUTABLE_PATH": "${user_config.chrome_path}"
+      }
+    }
+  },
+  "user_config": {
+    "headed_mode": {
+      "type": "boolean",
+      "title": "Headed mode",
+      "description": "Show each MakeCode session in its own browser window so you can watch the LLM drive the editor. Off by default (runs headless).",
+      "default": false,
+      "required": false
+    },
+    "chrome_path": {
+      "type": "file",
+      "title": "Chrome executable (optional)",
+      "description": "Path to Google Chrome or Chromium. Leave blank to auto-detect the system install.",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  },
+  "keywords": ["makecode", "microbit", "education", "puppeteer"],
+  "license": "MIT"
+}

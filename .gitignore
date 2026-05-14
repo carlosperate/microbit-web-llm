@@ -13,6 +13,12 @@ dist/
 dist-test-page/
 *.tsbuildinfo
 
+##########
+# MCPB   #
+##########
+.mcpb-staging/
+*.mcpb
+
 ######
 # OS #
 ######

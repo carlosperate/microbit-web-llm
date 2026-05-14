@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "build:mcpb": "node scripts/build-mcpb.mjs",
     "test": "vitest run",
     "dev:test-page": "vite --config test-page/vite.config.ts",
     "test:e2e": "playwright test --config playwright.config.ts",
@@ -22,6 +23,7 @@
   "dependencies": {
     "@microbit/makecode-embed": "^0.5.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "chrome-launcher": "^1.2.1",
     "esbuild": "^0.28.0",
     "puppeteer": "^23.0.0",
     "react": "^19.2.5",
@@ -29,6 +31,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",

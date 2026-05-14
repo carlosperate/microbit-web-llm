@@ -115,6 +115,24 @@ bin.ts (CLI)
 
 Each `session_start` allocates a Puppeteer tab (in headed mode: its own OS window) loading a local shell page; `session_end` closes the tab. Both browser processes stay alive between sessions. See [src/server/](src/server/).
 
+## Claude Desktop extension (.mcpb)
+
+For Claude Desktop you can build a one-click installable `.mcpb` bundle instead of editing a JSON config:
+
+```bash
+npm install
+npm run build:mcpb -w makecode-mcp
+```
+
+This stages the package into `packages/makecode-mcp/.mcpb-staging/`, installs runtime dependencies fresh (with Puppeteer's Chromium download skipped), and writes the bundle to `packages/makecode-mcp/dist/makecode-mcp.mcpb`. Double-click the file or drag it into Claude Desktop → Settings → Extensions to install.
+
+The bundle ships only JavaScript and relies on a system-installed Chrome (or Chromium), which the server locates at startup via [`chrome-launcher`](https://www.npmjs.com/package/chrome-launcher). Two settings are exposed in Claude Desktop's extension UI:
+
+- **Headed mode** — show each MakeCode session in its own browser window. Off by default.
+- **Chrome executable (optional)** — explicit path to a Chrome/Chromium binary. Leave blank to auto-detect.
+
+If no Chrome install is found and no override is given, the server exits with a clear stderr message — install Google Chrome (or Chromium) and try again.
+
 ## Configuring MCP clients
 
 This package is private to the monorepo, so MCP clients launch it directly from `dist/server/bin.js` rather than via `npx`. Build the package first:

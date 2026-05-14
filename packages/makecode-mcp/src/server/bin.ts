@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { Launcher } from "chrome-launcher";
 import puppeteer from "puppeteer";
 import { BrowserPool } from "./browser-pool.js";
+import { resolveChromePath } from "./chrome-path.js";
 import { parseHeadedFlag } from "./cli-options.js";
 import { adaptPuppeteerBrowser } from "./puppeteer-browser-adapter.js";
 import { PuppeteerTabPool } from "./puppeteer-tab-pool.js";
@@ -10,10 +12,15 @@ import { buildMcpServer } from "./mcp-server.js";
 
 async function main() {
   const headed = parseHeadedFlag(process.argv, process.env);
+  const executablePath = resolveChromePath({
+    env: process.env,
+    findSystemChrome: () => Launcher.getFirstInstallation(),
+  });
   const launch = (headless: boolean) => async () =>
     adaptPuppeteerBrowser(
       await puppeteer.launch({
         headless,
+        executablePath,
         defaultViewport: null,
         protocolTimeout: 300_000,
       }),
