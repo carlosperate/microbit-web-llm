@@ -2,7 +2,7 @@ import { createLogger } from "../shared/logger.js";
 import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
-import { startShellServer, type ShellServer } from "./shell/shell-server.js";
+import { startShellServer, type ShellServer } from "./shell-server.js";
 import type { OpenTabOptions, TabHandle, TabPool } from "./tab-pool.js";
 
 const log = createLogger("puppeteer-tab-pool");

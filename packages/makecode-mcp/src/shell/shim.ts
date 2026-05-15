@@ -2,9 +2,9 @@ import {
   createMakeCodeURL,
   MakeCodeFrameDriver,
 } from "@microbit/makecode-embed/vanilla";
-import { MakeCodeFrameDriverAdapter } from "../../browser/frame-driver-adapter.js";
-import { lazyRetry } from "../../shared/lazy-retry.js";
-import { fillProjectDefaults } from "../../shared/project-defaults.js";
+import { MakeCodeFrameDriverAdapter } from "../browser/frame-driver-adapter.js";
+import { lazyRetry } from "../shared/lazy-retry.js";
+import { fillProjectDefaults } from "../shared/project-defaults.js";
 
 // Tagged-union return shape for every page-RPC call. Surfaces page-side
 // failures as data rather than letting them traverse `page.evaluate` as

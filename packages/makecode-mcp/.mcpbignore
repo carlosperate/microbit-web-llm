@@ -1,6 +1,6 @@
-# NOTE: src/ must ship. shell-server.ts reads src/server/shell/*.html at
-# runtime and esbuild-bundles src/server/shell/shim.ts and render-shim.ts
-# (which reach into src/browser/ and src/shared/) on first use.
+# Sources stay out of the bundle — shell-server.ts now reads prebuilt
+# dist/shell/{shim.js, shell.html} produced by scripts/build-shim.mjs.
+src/
 test/
 test-page/
 test-results/

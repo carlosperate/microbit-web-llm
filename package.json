@@ -6,13 +6,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "test:e2e": "npm run test:e2e --workspaces --if-present",
-    "spike:svg": "npm --prefix spike run svg",
-    "spike:svg:headful": "npm --prefix spike run svg:headful",
-    "spike:hex": "npm --prefix spike run hex",
-    "spike:hex:headful": "npm --prefix spike run hex:headful"
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "test:e2e": "npm run test:e2e --workspaces"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

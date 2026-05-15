@@ -5,7 +5,14 @@
     "outDir": "dist",
     "rootDir": "src",
     "jsx": "react-jsx",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // Colocate the incremental-build sidecar with the outputs. With the
+    // default location (next to tsconfig.json), `rm -rf dist` leaves a
+    // stale buildinfo behind and tsc's next run sees "nothing changed,
+    // skip emission" — leaving dist/ empty until you also delete the
+    // buildinfo. Putting it inside dist/ couples the two lifecycles so
+    // `rm -rf dist` is a complete reset.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src"]
 }

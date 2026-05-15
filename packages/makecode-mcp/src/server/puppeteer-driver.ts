@@ -1,7 +1,7 @@
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "../browser/driver-port.js";
 import type { PageLike } from "./browser-pool.js";
 
-// Iframe RPC boundary. The shim methods (see src/server/shell/shim.ts) return
+// Iframe RPC boundary. The shim methods (see src/shell/shim.ts) return
 // a tagged union `Result<T>` rather than throwing across page.evaluate —
 // Puppeteer's exception marshalling would otherwise append a browser-side
 // stack frame to the error message and leak it to the MCP client. Translating

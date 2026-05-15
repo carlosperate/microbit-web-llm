@@ -6,7 +6,7 @@ import type {
   PageLike,
 } from "../../src/server/browser-pool.ts";
 
-vi.mock("../../src/server/shell/shell-server.js", () => ({
+vi.mock("../../src/server/shell-server.js", () => ({
   startShellServer: vi.fn(async () => ({
     url: "http://127.0.0.1:0/shell.html",
     close: async () => {},

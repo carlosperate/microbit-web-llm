@@ -38,16 +38,18 @@ console.log("→ Building TypeScript (forced clean)");
 // staged bundle always reflects current source.
 run("npx tsc -b --force");
 
+console.log("\n→ Bundling browser-side shell shim");
+// Writes dist/shell/shim.js (esbuild bundle) and dist/shell/shell.html.
+// shell-server.ts reads those at runtime — they replace the previous
+// "ship src/ and esbuild on first request" path.
+run("node scripts/build-shim.mjs");
+
 console.log("\n→ Resetting staging dir");
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
 
 console.log("\n→ Staging files");
 stage("dist");
-// shell-server.ts reads src/server/shell/*.html at runtime and bundles the
-// browser-side shims (which reach into src/browser/ and src/shared/) via
-// esbuild on first request, so the src tree must ship.
-stage("src");
 stage("manifest.json");
 stage("README.md");
 

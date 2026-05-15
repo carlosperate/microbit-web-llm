@@ -2,33 +2,14 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import esbuild from "esbuild";
 
-// This module lives in either src/server/shell (dev) or dist/server/shell
-// (built). In both cases the package root is three levels up, and the
-// browser-side assets always live under src/server/shell in source form.
+// Compiled to dist/server/shell-server.js. The browser-side artifacts are
+// prebuilt by scripts/build-shim.mjs into dist/shell/{shim.js, shell.html}
+// — sibling to the compiled server dir.
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SHELL_SRC = resolve(HERE, "..", "..", "..", "src", "server", "shell");
-const SHIM_ENTRY = resolve(SHELL_SRC, "shim.ts");
-const SHELL_HTML = resolve(SHELL_SRC, "shell.html");
-
-const bundles = new Map<string, string>();
-async function bundle(entry: string): Promise<string> {
-  const cached = bundles.get(entry);
-  if (cached) return cached;
-  const result = await esbuild.build({
-    entryPoints: [entry],
-    bundle: true,
-    format: "esm",
-    target: "es2022",
-    platform: "browser",
-    write: false,
-    sourcemap: "inline",
-  });
-  const text = result.outputFiles[0].text;
-  bundles.set(entry, text);
-  return text;
-}
+const SHELL_DIST = resolve(HERE, "..", "shell");
+const SHIM_JS = resolve(SHELL_DIST, "shim.js");
+const SHELL_HTML = resolve(SHELL_DIST, "shell.html");
 
 export interface ShellServer {
   url: string;
@@ -36,8 +17,11 @@ export interface ShellServer {
 }
 
 export async function startShellServer(): Promise<ShellServer> {
+  // Read once at startup. If the files are missing the user forgot to run
+  // `npm run build` (or `scripts/build-shim.mjs`) — fail loud rather than
+  // 404 every tool call.
   const shellHtml = readFileSync(SHELL_HTML, "utf8");
-  const shim = await bundle(SHIM_ENTRY);
+  const shim = readFileSync(SHIM_JS, "utf8");
   const routes: Record<string, { body: string; type: string }> = {
     "/": { body: shellHtml, type: "text/html; charset=utf-8" },
     "/shell.html": { body: shellHtml, type: "text/html; charset=utf-8" },

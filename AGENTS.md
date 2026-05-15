@@ -27,7 +27,7 @@ npm run dev:test-mcp -w makecode-mcp # build + launch MCP Inspector against the 
 
 Package manager: **npm workspaces**. Do not use pnpm or yarn.
 
-TypeScript project references are used across packages. Run `npm run build --workspaces` before running the app if you've changed `makecode-mcp`.
+TypeScript project references are used across packages. Run `npm run build` before running the app if you've changed `makecode-mcp`. To reset, `rm -rf dist` is safe — `makecode-mcp/tsconfig.json` sets `tsBuildInfoFile: "./dist/.tsbuildinfo"` so the incremental-build sidecar lives inside `dist/` and gets wiped with it; the next build is a full rebuild. Default-location buildinfo (next to tsconfig.json) would survive a `dist` wipe and cause tsc to skip emission — colocating fixes that.
 
 
 ## Key Architectural Rules
@@ -153,18 +153,21 @@ bin.ts (CLI)                                                ← parses --headed 
                           ├── sessionPool: BrowserPool      ← src/server/browser-pool.ts (headless or headed)
                           ├── adaptPuppeteerBrowser()       ← src/server/puppeteer-browser-adapter.ts (CDP openWindow)
                           ├── PuppeteerDriver               ← src/server/puppeteer-driver.ts
-                          └── startShellServer()            ← src/server/shell/shell-server.ts
+                          └── startShellServer()            ← src/server/shell-server.ts
+                                ↳ serves prebuilt assets    ← dist/shell/{shim.js, shell.html}
+                                                              (sources at src/shell/, bundled at build time)
 ```
 
 `TabExecutor` (implements `ServerExecutor`) owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. It generates the `session_id` itself and forwards `{ sessionId, label }` to `TabPool.openTab` so the pool can embed both into the shell URL. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
 
 ### MCP server shell
 
-The MCP server serves a single static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`:
+The MCP server serves a single static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`. Browser-side sources live under `src/shell/` (alongside `src/browser/` / `src/server/` / `src/shared/`) and are bundled at build time — they do **not** ship as TypeScript:
 
-- `src/server/shell/shell.html` — one `<iframe id="mk">` and a `<script type="module" src="/shim.js">`. Used for both session tabs and the shared stateless tab.
-- `src/server/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocksImage`). The shim eagerly starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns the same init promise so `PuppeteerTabPool.openTab` and `statelessPage()` can block until the editor's `onEditorContentLoaded` has fired. This matters on slow networks where MakeCode takes many seconds to load — without the await, the first tool call would itself trigger and wait on the load, but the MCP client meanwhile thinks the tool is ready. Each shim method returns a tagged `ShimResult<T>` (`{ ok: true, value } | { ok: false, error }`) so failures don't traverse `page.evaluate` as exceptions and pick up Puppeteer's browser-side stack frame — `PuppeteerDriver` unwraps the union on the Node side.
-- `src/server/shell/shell-server.ts` — reads `shell.html` and bundles `shim.ts` with esbuild on first use (cached for the process lifetime), then serves them on `http://127.0.0.1:<ephemeral>`.
+- `src/shell/shell.html` — one `<iframe id="mk">` and a `<script type="module" src="/shim.js">`. Used for both session tabs and the shared stateless tab.
+- `src/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocksImage`). The shim eagerly starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns the same init promise so `PuppeteerTabPool.openTab` and `statelessPage()` can block until the editor's `onEditorContentLoaded` has fired. This matters on slow networks where MakeCode takes many seconds to load — without the await, the first tool call would itself trigger and wait on the load, but the MCP client meanwhile thinks the tool is ready. Each shim method returns a tagged `ShimResult<T>` (`{ ok: true, value } | { ok: false, error }`) so failures don't traverse `page.evaluate` as exceptions and pick up Puppeteer's browser-side stack frame — `PuppeteerDriver` unwraps the union on the Node side.
+- `scripts/build-shim.mjs` — esbuild-bundles `src/shell/shim.ts` → `dist/shell/shim.js` (browser ESM, inline sourcemap) and copies `src/shell/shell.html` → `dist/shell/shell.html`. Runs as part of `npm run build` after `tsc -b`.
+- `src/server/shell-server.ts` — Node-side. Reads the prebuilt `dist/shell/{shim.js, shell.html}` at startup and serves them on `http://127.0.0.1:<ephemeral>`. If the prebuilt files are missing it throws on startup rather than 404'ing every tool call — re-run `npm run build` and try again.
 
 There is exactly one persistent **stateless tab** (`PuppeteerTabPool.statelessPage`) that hosts the same shell + editor as session tabs. `bin.ts` calls `PuppeteerTabPool.prewarm()` at MCP server startup so MakeCode begins loading immediately (don't await — failures are swallowed and the next `withStatelessTab` call retries). All `*_from_code` tools share this tab through `withStatelessTab(fn)`, which serialises calls via a promise-chain mutex so the editor's single-project state can't race. This buys editor-side TS-compile validation for `get_blocks_img_from_code` for free: it routes through the same `setProject` (importProject + switchBlocks + decompile-confirm-wait) that `session_set_code` uses, so TS that doesn't compile throws with the same actionable hint; valid TS that can't be decompiled to blocks passes and renders the grey "raw text" fallback. (The old `render.html` + `render-shim.ts` render-only path no longer exists — the unified editor tab replaces both it and the per-call transient tab that `get_hex_file_from_code` used to spin up.)
 
@@ -186,9 +189,9 @@ For local manual testing, run `npm run dev:test-mcp -w makecode-mcp`. This build
 
 ### Claude Desktop extension (.mcpb)
 
-`packages/makecode-mcp/manifest.json` + `scripts/build-mcpb.mjs` package the server as a Claude Desktop extension. The script stages `dist/`, `src/`, `manifest.json`, `README.md`, and a trimmed `package.json` into `.mcpb-staging/`, runs `npm install --omit=dev` there with `PUPPETEER_SKIP_DOWNLOAD=true`, then calls `npx @anthropic-ai/mcpb pack`. The resulting `dist/makecode-mcp.mcpb` is platform-agnostic because Chrome is discovered at runtime. The manifest exposes two `user_config` fields — `headed_mode` (boolean → `MKCP_HEADED` env var) and `chrome_path` (file → `PUPPETEER_EXECUTABLE_PATH`); the resolver treats empty `chrome_path` as "auto-detect", so the file picker can stay optional.
+`packages/makecode-mcp/manifest.json` + `scripts/build-mcpb.mjs` package the server as a Claude Desktop extension. The script runs `tsc -b --force` and `node scripts/build-shim.mjs`, then stages `dist/`, `manifest.json`, `README.md`, and a trimmed `package.json` into `.mcpb-staging/`, runs `npm install --omit=dev` there with `PUPPETEER_SKIP_DOWNLOAD=true`, then calls `npx @anthropic-ai/mcpb pack`. The resulting `dist/makecode-mcp.mcpb` is platform-agnostic because Chrome is discovered at runtime. The manifest exposes two `user_config` fields — `headed_mode` (boolean → `MKCP_HEADED` env var) and `chrome_path` (file → `PUPPETEER_EXECUTABLE_PATH`); the resolver treats empty `chrome_path` as "auto-detect", so the file picker can stay optional.
 
-`src/` ships in the bundle on purpose: `shell-server.ts` reads `src/server/shell/shell.html` at runtime and esbuild-bundles `shim.ts` on first use, and the shim imports from `src/browser/` and `src/shared/`. Do not add `src/` to `.mcpbignore` without first pre-bundling that entry point at build time.
+`src/` is **not** in the bundle — `.mcpbignore` excludes it. Everything browser-side that `shell-server.ts` serves is prebuilt into `dist/shell/` by `scripts/build-shim.mjs`. `esbuild` lives in `devDependencies` for the same reason. If you ever need raw TypeScript at runtime again, pre-bundle the new entry at build time rather than restoring `stage("src")`.
 
 ### Shared project defaults
 
