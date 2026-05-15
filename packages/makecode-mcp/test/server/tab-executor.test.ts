@@ -243,3 +243,111 @@ describe("TabExecutor — dispose", () => {
     expect(pool.dispose).toHaveBeenCalledOnce();
   });
 });
+
+describe("TabExecutor — idle session reaper", () => {
+  it("closes sessions untouched for longer than idleTimeoutMs and returns SessionError(expired) on next use", async () => {
+    const { pool, handles } = makePool();
+    // Inject a controllable clock and disable the auto-reap interval — we
+    // trigger the reaper manually so the test is deterministic without fake
+    // timers and without depending on real wall-clock.
+    let nowMs = 1_000_000;
+    const exec = new TabExecutor(pool, {
+      idleTimeoutMs: 30 * 60_000,
+      reapIntervalMs: 0,
+      now: () => nowMs,
+    });
+    const { session_id } = await exec.startSession();
+    // 29 minutes — still within window.
+    nowMs += 29 * 60_000;
+    exec.reapIdleSessions();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    // 31 minutes total — past the cutoff.
+    nowMs += 2 * 60_000;
+    exec.reapIdleSessions();
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    await expect(exec.getCurrentCode(session_id)).rejects.toMatchObject({
+      name: "SessionError",
+      code: "expired",
+    });
+  });
+
+  it("any successful call resets the idle timer for that session", async () => {
+    const { pool, handles } = makePool();
+    let nowMs = 1_000_000;
+    const exec = new TabExecutor(pool, {
+      idleTimeoutMs: 30 * 60_000,
+      reapIntervalMs: 0,
+      now: () => nowMs,
+    });
+    const { session_id } = await exec.startSession();
+    nowMs += 29 * 60_000;
+    await exec.getCurrentCode(session_id); // touch
+    nowMs += 29 * 60_000; // 58 min total, but only 29 since last touch
+    exec.reapIdleSessions();
+    expect(handles[0].close).not.toHaveBeenCalled();
+  });
+
+  it("reaping only one of several sessions leaves the others usable", async () => {
+    const { pool, handles } = makePool();
+    let nowMs = 1_000_000;
+    const exec = new TabExecutor(pool, {
+      idleTimeoutMs: 30 * 60_000,
+      reapIntervalMs: 0,
+      now: () => nowMs,
+    });
+    const { session_id: a } = await exec.startSession();
+    nowMs += 20 * 60_000;
+    const { session_id: b } = await exec.startSession();
+    nowMs += 15 * 60_000; // a: 35 min idle (stale), b: 15 min idle (fresh)
+    exec.reapIdleSessions();
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    expect(handles[1].close).not.toHaveBeenCalled();
+    await expect(exec.getCurrentCode(a)).rejects.toMatchObject({ code: "expired" });
+    await expect(exec.getCurrentCode(b)).resolves.toBeDefined();
+  });
+
+  it("idleTimeoutMs:0 disables the reaper", async () => {
+    const { pool, handles } = makePool();
+    let nowMs = 1_000_000;
+    const exec = new TabExecutor(pool, {
+      idleTimeoutMs: 0,
+      reapIntervalMs: 0,
+      now: () => nowMs,
+    });
+    const { session_id } = await exec.startSession();
+    nowMs += 24 * 3_600_000; // 24 hours
+    exec.reapIdleSessions();
+    expect(handles[0].close).not.toHaveBeenCalled();
+    await expect(exec.getCurrentCode(session_id)).resolves.toBeDefined();
+  });
+
+  it("dispose clears the background reap interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const { pool } = makePool();
+      const exec = new TabExecutor(pool, {
+        idleTimeoutMs: 30 * 60_000,
+        reapIntervalMs: 60_000,
+      });
+      await exec.dispose();
+      // After dispose, no timers should be pending; advancing time must not
+      // schedule further reap work.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("endSession does not mark the id as expired (it's a normal close, not a reap)", async () => {
+    // Distinguish "user called end" from "reaper closed it" — the former
+    // should yield 'unknown' on subsequent use (LLM may have lost track),
+    // the latter 'expired' (server timed it out).
+    const { pool } = makePool();
+    const exec = new TabExecutor(pool, { reapIntervalMs: 0 });
+    const { session_id } = await exec.startSession();
+    await exec.endSession(session_id);
+    await expect(exec.getCurrentCode(session_id)).rejects.toMatchObject({
+      code: "unknown",
+    });
+  });
+});

@@ -1,3 +1,7 @@
+import { createLogger } from "../shared/logger.js";
+
+const log = createLogger("browser-pool");
+
 export interface PageLike {
   close(): Promise<void>;
   goto(url: string, options?: unknown): Promise<unknown>;
@@ -11,6 +15,15 @@ export interface BrowserLike {
   newPage(): Promise<PageLike>;
   pages?(): Promise<PageLike[]>;
   openWindow?(url: string): Promise<PageLike>;
+  /**
+   * Optional disconnect hook. The pool registers a listener so a dead browser
+   * is evicted proactively, instead of lingering in `this.browser` until the
+   * next `isConnected()` check at call time. Without this, two concurrent
+   * in-flight callers can both observe a half-dead browser before one of them
+   * triggers eviction; with it, the disconnect event nulls the cached
+   * reference immediately.
+   */
+  onDisconnected?(listener: () => void): void;
 }
 
 export type BrowserLauncher = () => Promise<BrowserLike>;
@@ -35,6 +48,14 @@ export class BrowserPool implements BrowserPoolLike {
     const launching = this.launcher().then(
       (b) => {
         this.browser = b;
+        // Identity-guarded so a late disconnect from a *previous* browser
+        // can't null out a freshly-launched replacement.
+        b.onDisconnected?.(() => {
+          if (this.browser === b) {
+            log.warn("browser disconnected — evicting cached instance");
+            this.browser = null;
+          }
+        });
         if (this.launching === launching) this.launching = null;
         return b;
       },

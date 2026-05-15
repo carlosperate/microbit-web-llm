@@ -53,7 +53,7 @@ const CODE_PROP = {
   },
 };
 
-const noSessionHint = `If the session_id is missing or unknown, the tool returns an error — call ${TOOL.SESSION_START} first to get a new one.`;
+const noSessionHint = `If the session_id is missing, unknown, or expired (idle session reaped after inactivity), the tool returns an error — call ${TOOL.SESSION_START} first to get a new one.`;
 
 const loadedBrowserHint = `The editor must already have code loaded (via ${TOOL.SESSION_SET_CODE}) before this call.`;
 

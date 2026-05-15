@@ -18,10 +18,53 @@ import type { TabHandle, TabPool } from "./tab-pool.js";
 const log = createLogger("tab-executor");
 const toBase64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
-export class TabExecutor implements ServerExecutor {
-  private readonly sessions = new Map<string, TabHandle>();
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_REAP_INTERVAL_MS = 60_000;
+/** Bound the expired-id history; once full, the oldest entries fall out and
+ *  subsequent use of those ids returns "unknown" instead of "expired". */
+const MAX_EXPIRED_HISTORY = 256;
 
-  constructor(private readonly pool: TabPool) {}
+export interface TabExecutorOptions {
+  /**
+   * Sessions whose last touch is older than this are closed by the background
+   * reaper. Subsequent use of a reaped session returns `SessionError("expired")`.
+   * Default: 30 minutes. Set to `0` (or negative) to disable.
+   */
+  idleTimeoutMs?: number;
+  /**
+   * How often the background reaper checks for stale sessions. Default: 1 min.
+   * Set to `0` to disable the timer entirely (tests drive `reapIdleSessions()`
+   * manually).
+   */
+  reapIntervalMs?: number;
+  /** Override the clock. Defaults to `Date.now`. Tests inject a fake. */
+  now?: () => number;
+}
+
+interface SessionEntry {
+  tab: TabHandle;
+  lastUsedAt: number;
+}
+
+export class TabExecutor implements ServerExecutor {
+  private readonly sessions = new Map<string, SessionEntry>();
+  /** Insertion-ordered set of recently reaped session ids so we can return
+   *  `expired` instead of `unknown` for a bounded window after a reap. */
+  private readonly expiredIds = new Set<string>();
+  private readonly idleTimeoutMs: number;
+  private readonly now: () => number;
+  private reapTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(private readonly pool: TabPool, opts: TabExecutorOptions = {}) {
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.now = opts.now ?? Date.now;
+    const reapIntervalMs = opts.reapIntervalMs ?? DEFAULT_REAP_INTERVAL_MS;
+    if (this.idleTimeoutMs > 0 && reapIntervalMs > 0) {
+      this.reapTimer = setInterval(() => this.reapIdleSessions(), reapIntervalMs);
+      // Don't keep the Node process alive solely for this timer.
+      this.reapTimer.unref?.();
+    }
+  }
 
   async startSession(opts?: StartSessionOptions): Promise<StartSessionResult> {
     const session_id = randomUUID();
@@ -30,7 +73,7 @@ export class TabExecutor implements ServerExecutor {
         ? { sessionId: session_id, label: opts.label }
         : { sessionId: session_id },
     );
-    this.sessions.set(session_id, tab);
+    this.sessions.set(session_id, { tab, lastUsedAt: this.now() });
     log.info("startSession → new tab", {
       session_id,
       label: opts?.label,
@@ -47,6 +90,36 @@ export class TabExecutor implements ServerExecutor {
       session_id: sessionId,
       openSessions: this.sessions.size,
     });
+  }
+
+  /**
+   * Close any session whose last use is older than `idleTimeoutMs`. Exposed
+   * so tests can drive the reaper deterministically; in production the
+   * background interval calls it.
+   */
+  reapIdleSessions(): void {
+    if (this.idleTimeoutMs <= 0) return;
+    const cutoff = this.now() - this.idleTimeoutMs;
+    for (const [id, entry] of this.sessions) {
+      if (entry.lastUsedAt < cutoff) {
+        this.sessions.delete(id);
+        entry.tab.close().catch(() => {});
+        this.markExpired(id);
+        log.info("reapIdleSessions → closed idle session", {
+          session_id: id,
+          idleMs: this.now() - entry.lastUsedAt,
+        });
+      }
+    }
+  }
+
+  private markExpired(sessionId: string): void {
+    this.expiredIds.add(sessionId);
+    while (this.expiredIds.size > MAX_EXPIRED_HISTORY) {
+      const oldest = this.expiredIds.values().next().value;
+      if (oldest === undefined) break;
+      this.expiredIds.delete(oldest);
+    }
   }
 
   async getCurrentCode(sessionId: string): Promise<string> {
@@ -93,7 +166,11 @@ export class TabExecutor implements ServerExecutor {
   }
 
   async dispose(): Promise<void> {
-    const tabs = [...this.sessions.values()];
+    if (this.reapTimer) {
+      clearInterval(this.reapTimer);
+      this.reapTimer = null;
+    }
+    const tabs = [...this.sessions.values()].map((e) => e.tab);
     log.info("dispose → closing sessions and pool", { openSessions: tabs.length });
     this.sessions.clear();
     await Promise.all(tabs.map((t) => t.close().catch(() => {})));
@@ -107,13 +184,20 @@ export class TabExecutor implements ServerExecutor {
         `session_id is required. Call ${TOOL.SESSION_START} first.`,
       );
     }
-    const tab = this.sessions.get(sessionId);
-    if (!tab) {
+    if (this.expiredIds.has(sessionId)) {
+      throw new SessionError(
+        "expired",
+        `session_id has expired due to inactivity. Call ${TOOL.SESSION_START} to get a new one.`,
+      );
+    }
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
       throw new SessionError(
         "unknown",
         `session_id is unknown. Call ${TOOL.SESSION_START} to get a new one.`,
       );
     }
-    return tab;
+    entry.lastUsedAt = this.now();
+    return entry.tab;
   }
 }

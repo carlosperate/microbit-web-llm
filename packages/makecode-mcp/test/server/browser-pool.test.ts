@@ -19,10 +19,12 @@ function makePageDouble(): PageLike & {
 
 function makeBrowserDouble() {
   const pages: Array<ReturnType<typeof makePageDouble>> = [];
+  const disconnectListeners: Array<() => void> = [];
   const browser: BrowserLike & {
     isConnected: MockedFunction<() => boolean>;
     close: MockedFunction<() => Promise<void>>;
     newPage: MockedFunction<() => Promise<PageLike>>;
+    onDisconnected: MockedFunction<(listener: () => void) => void>;
   } = {
     isConnected: vi.fn(() => true),
     close: vi.fn(async () => {}),
@@ -31,8 +33,16 @@ function makeBrowserDouble() {
       pages.push(p);
       return p;
     }),
+    onDisconnected: vi.fn((listener: () => void) => {
+      disconnectListeners.push(listener);
+    }),
   } as never;
-  return { browser, pages };
+  /** Simulate the browser's underlying CDP disconnect. */
+  const fireDisconnect = () => {
+    browser.isConnected.mockReturnValue(false);
+    for (const l of disconnectListeners) l();
+  };
+  return { browser, pages, fireDisconnect };
 }
 
 describe("BrowserPool", () => {
@@ -97,6 +107,46 @@ describe("BrowserPool", () => {
     const pool = new BrowserPool(launcher);
     await pool.dispose();
     expect(launcher).not.toHaveBeenCalled();
+  });
+
+  it("registers a disconnect listener on launch and evicts the cached browser when it fires", async () => {
+    const first = makeBrowserDouble();
+    const second = makeBrowserDouble();
+    const browsers = [first.browser, second.browser];
+    const launcher = vi.fn(async () => browsers.shift()!) as MockedFunction<
+      BrowserLauncher
+    >;
+    const pool = new BrowserPool(launcher);
+    await pool.withTab(async () => {});
+    expect(first.browser.onDisconnected).toHaveBeenCalledOnce();
+    // Simulate the browser's underlying CDP connection dropping.
+    first.fireDisconnect();
+    // Next call must launch a fresh browser; the cached reference was evicted
+    // proactively by the disconnect listener, not lazily by isConnected().
+    await pool.withTab(async () => {});
+    expect(launcher).toHaveBeenCalledTimes(2);
+    expect(second.browser.newPage).toHaveBeenCalledOnce();
+  });
+
+  it("a stale disconnect from a previous browser does not evict the current one", async () => {
+    // Cover the "this.browser === b" guard: a late-firing disconnect from an
+    // already-replaced browser must not null out the new one.
+    const first = makeBrowserDouble();
+    const second = makeBrowserDouble();
+    const browsers = [first.browser, second.browser];
+    const launcher = vi.fn(async () => browsers.shift()!) as MockedFunction<
+      BrowserLauncher
+    >;
+    const pool = new BrowserPool(launcher);
+    await pool.withTab(async () => {});
+    first.fireDisconnect();
+    await pool.withTab(async () => {}); // launches second
+    // Late disconnect from first — must be ignored.
+    first.fireDisconnect();
+    await pool.withTab(async () => {});
+    // Still on the second browser, no third launch.
+    expect(launcher).toHaveBeenCalledTimes(2);
+    expect(second.browser.newPage).toHaveBeenCalledTimes(2);
   });
 
   it("reuses an initial about:blank page on the first openPage (no extra tab)", async () => {

@@ -9,6 +9,7 @@ interface PuppeteerLikeBrowser {
   newPage(): Promise<PageLike>;
   pages(): Promise<PageLike[]>;
   target(): { createCDPSession(): Promise<CdpSessionLike> };
+  on?(event: "disconnected", listener: () => void): unknown;
 }
 
 interface CdpSessionLike {
@@ -25,6 +26,9 @@ export function adaptPuppeteerBrowser(browser: PuppeteerLikeBrowser): BrowserLik
     close: () => browser.close(),
     newPage: () => browser.newPage(),
     pages: () => browser.pages(),
+    onDisconnected: (listener) => {
+      browser.on?.("disconnected", listener);
+    },
     async openWindow(url: string): Promise<PageLike> {
       // CDP `newWindow: true` (not `window.open`) so headed mode gets a real
       // OS window. The new page is found by set-difference against a pre-call

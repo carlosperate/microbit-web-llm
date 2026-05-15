@@ -17,7 +17,7 @@ describe("SessionError", () => {
   });
 
   it("accepts all defined codes", () => {
-    for (const code of ["missing", "unknown"] as const) {
+    for (const code of ["missing", "unknown", "expired"] as const) {
       const e = new SessionError(code, "msg");
       expect(e.code).toBe(code);
     }

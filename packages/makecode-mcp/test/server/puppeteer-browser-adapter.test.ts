@@ -51,6 +51,25 @@ describe("adaptPuppeteerBrowser → openWindow", () => {
     );
   });
 
+  it("forwards onDisconnected listeners to the underlying browser's 'disconnected' event", () => {
+    const listeners: Array<{ event: string; cb: () => void }> = [];
+    const browser = {
+      isConnected: () => true,
+      close: vi.fn(async () => {}),
+      newPage: vi.fn(),
+      pages: vi.fn(async () => []),
+      target: () => ({ createCDPSession: async () => ({ send: async () => ({}), detach: async () => {} }) }),
+      on: vi.fn((event: string, cb: () => void) => listeners.push({ event, cb })),
+    };
+    const adapted = adaptPuppeteerBrowser(browser as never);
+    const listener = vi.fn();
+    adapted.onDisconnected!(listener);
+    expect(browser.on).toHaveBeenCalledWith("disconnected", expect.any(Function));
+    // Fire the underlying event — adapter must invoke the registered listener.
+    listeners.find((l) => l.event === "disconnected")!.cb();
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("times out with a clear error if the new window never appears (no silent hang)", async () => {
     vi.useFakeTimers();
     try {

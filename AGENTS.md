@@ -91,7 +91,7 @@ The only connection between `ChatPanel` and `MakeCodePanel` in the app is the `I
 This is a POC for teaching and research; a live trace of what the system is doing is how the developer (and student observers) debug it. Logging is enabled by default and must stay that way.
 
 - Use the shared logger from `packages/makecode-mcp/src/shared/logger.ts`. Import via `makecode-mcp/browser` or `makecode-mcp/server` — never hand-roll `console.log` prefixes or instantiate a second logger.
-- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces include `app`, `adapter`, `tool-loop`, `webllm`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool` — reuse these when extending the same area.
+- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces include `app`, `adapter`, `tool-loop`, `webllm`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool`, `browser-pool` — reuse these when extending the same area.
 - Log the lifecycle events a reader needs to follow the flow: entry/exit of a run, each tool-loop step with `finish_reason` and pending-call count, every tool dispatch with args summary + result size, stall detection and recovery, errors. If you add a new tool case, log both the request and the result.
 - Use `preview(value, maxChars?)` for anything that can be large (code, PNG base64, hex, JSON blobs). Never dump raw multi-kB strings to the console.
 - Use `log.time(label)` (returns an end-fn) to instrument any async boundary a user might suspect of hanging — model load, tool dispatch, completion stream.
@@ -160,6 +160,10 @@ bin.ts (CLI)                                                ← parses --headed 
 
 `TabExecutor` (implements `ServerExecutor`) owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. It generates the `session_id` itself and forwards `{ sessionId, label }` to `TabPool.openTab` so the pool can embed both into the shell URL. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
 
+`TabExecutor` also runs a background **idle-session reaper** (default 30 min timeout, 1 min interval). Every successful per-session call refreshes the session's `lastUsedAt`; the reaper closes any session that hasn't been touched within the timeout and remembers the id in a bounded set (256 most-recent expirations). Subsequent use of a reaped session raises `SessionError("expired")` instead of `"unknown"` so the LLM gets a precise reason. Construct with `new TabExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })` to override; `idleTimeoutMs: 0` disables the reaper entirely.
+
+`BrowserPool` registers an `onDisconnected` listener on each launched browser so a CDP-level disconnect (Chrome crash, OS kill) evicts the cached reference immediately. Without the listener, the dead browser would linger until the next `isConnected()` check at call time. The listener is identity-guarded so a late-firing disconnect from a previous browser cannot null out a replacement.
+
 ### MCP server shell
 
 The MCP server serves a single static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`. Browser-side sources live under `src/shell/` (alongside `src/browser/` / `src/server/` / `src/shared/`) and are bundled at build time — they do **not** ship as TypeScript:
@@ -177,7 +181,7 @@ There is exactly one persistent **stateless tab** (`PuppeteerTabPool.statelessPa
 
 `src/server/mcp-server.ts` uses the high-level `McpServer` from `@modelcontextprotocol/sdk/server/mcp.js` and registers each tool with `server.registerTool(name, { description, inputSchema }, handler)`. The single source of truth is `serverToolMeta` in `shared/tools.ts` — Zod raw shapes + descriptions. `McpServer` consumes the shapes directly; `serverTools` (JSON Schema descriptors used by tests and the browser-shaped path) are derived from the same shapes via `z.toJSONSchema(z.strictObject(shape))` so the two views can never drift.
 
-Each handler is wrapped in a `safe(name, fn)` helper that catches `SessionError` and arbitrary errors and returns `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }`. Without this wrapper `McpServer` would surface a thrown error as a transport-level error, losing the session-code taxonomy (`missing` / `unknown`) that LLMs use to self-correct.
+Each handler is wrapped in a `safe(name, fn)` helper that catches `SessionError` and arbitrary errors and returns `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }`. Without this wrapper `McpServer` would surface a thrown error as a transport-level error, losing the session-code taxonomy (`missing` / `unknown` / `expired`) that LLMs use to self-correct. `expired` is returned by `TabExecutor` when the idle reaper has closed a session for inactivity (default 30 minutes); the model treats it the same as `unknown` — start a new session.
 
 ### CLI entrypoint
 
