@@ -1,9 +1,6 @@
-// Rasterize an SVG string to a base64-encoded PNG using the browser's
-// Image + Canvas APIs. Runs in the iframe-executor (host page) and inside
-// the Puppeteer-driven shell page on the server target.
-//
-// The output is the raw base64 (no `data:image/png;base64,` prefix), ready
-// to drop into an MCP `image` content block or an `<img src="data:...">`.
+// Rasterize an SVG to base64 PNG via Image + Canvas. Runs in the iframe
+// executor (host page) and the Puppeteer shell page on the server. Output is
+// raw base64 (no `data:image/png;base64,` prefix).
 
 export async function svgToPngBase64(
   svg: string,

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(__dirname, "..");
+const repoRoot = join(packageRoot, "../..");
 const stagingDir = join(packageRoot, ".mcpb-staging");
 const distDir = join(packageRoot, "dist");
 const outFile = join(distDir, "makecode-mcp.mcpb");
@@ -22,8 +23,7 @@ function run(cmd, opts = {}) {
   execSync(cmd, { stdio: "inherit", cwd: packageRoot, ...opts });
 }
 
-function stage(name) {
-  const src = join(packageRoot, name);
+function stage(name, src = join(packageRoot, name)) {
   const dest = join(stagingDir, name);
   if (!existsSync(src)) {
     throw new Error(`Cannot stage missing file: ${name}`);
@@ -52,6 +52,7 @@ console.log("\n→ Staging files");
 stage("dist");
 stage("manifest.json");
 stage("README.md");
+stage("LICENSE", join(repoRoot, "LICENSE"));
 
 // Strip dev-only fields and the private flag so the staged package.json is a
 // minimal runtime descriptor. We don't republish it; this just keeps the

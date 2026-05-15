@@ -28,6 +28,10 @@ async function main() {
   const renderPool = new BrowserPool(launch(true));
   const sessionPool = new BrowserPool(launch(!headed));
   const pool = new PuppeteerTabPool({ renderPool, sessionPool, headed });
+  // Defaults: 30 min idle timeout, reaped on a 1 min interval. Long-lived
+  // MCP servers can otherwise accumulate abandoned session tabs indefinitely
+  // (an LLM client that crashes between session_start and session_end leaves
+  // a tab open forever).
   const executor = new TabExecutor(pool);
   // Start the stateless editor tab loading immediately — MakeCode can take
   // many seconds on cold cache / slow networks, so prewarming gives the

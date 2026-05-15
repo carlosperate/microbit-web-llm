@@ -17,10 +17,10 @@ const DEFAULT_MAIN_BLOCKS =
   '<xml xmlns="http://www.w3.org/1999/xhtml"><variables></variables></xml>';
 const DEFAULT_README = " ";
 
-// Merge user-supplied files with the minimal set MakeCode needs (pxt.json,
-// main.blocks, README.md) and overwrite main.ts with `code`. The workspace-save
-// event on a freshly initialised editor can return an empty or partial file
-// map; without these defaults importProject is silently ignored.
+// Merge user files with MakeCode's minimal required set (pxt.json,
+// main.blocks, README.md) and overwrite main.ts. Without these defaults,
+// importProject is silently ignored when a freshly initialised editor's
+// workspace-save returns an empty/partial file map.
 export function fillProjectDefaults(
   text: Record<string, string>,
   code: string,

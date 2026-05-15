@@ -1,9 +1,9 @@
 # makecode-mcp
 
-A TypeScript library that exposes the [MakeCode micro:bit editor](https://makecode.microbit.org/) to LLMs through a small, stable tool surface. Ships two targets from a single codebase:
+A TypeScript library that exposes the [MakeCode micro:bit editor](https://makecode.microbit.org/) to LLMs through a small tool surface. Ships two targets from a single codebase:
 
-- **`makecode-mcp/browser`** — a React `MakeCodePanel` component and a stateless `IframeExecutor` for driving an embedded MakeCode iframe from an in-browser LLM.
-- **`makecode-mcp/server`** — a Node.js binary (`makecode-mcp`) that runs as a stdio [Model Context Protocol](https://modelcontextprotocol.io) server, using Puppeteer to host one MakeCode tab per LLM session.
+- **`makecode-mcp/browser`**: A React `MakeCodePanel` component and a stateless `IframeExecutor` for driving an embedded MakeCode iframe from an in-browser LLM.
+- **`makecode-mcp/server`**: A Node.js binary (`makecode-mcp`) that runs as a stdio [Model Context Protocol](https://modelcontextprotocol.io) server, using Puppeteer to host one MakeCode tab per LLM session.
 
 All MakeCode integration goes through [`@microbit/makecode-embed`](https://github.com/microbit-foundation/makecode-embed) — no hand-rolled `postMessage`.
 
@@ -18,12 +18,12 @@ npm run build -w makecode-mcp
 
 ## Two targets, two interfaces
 
-The browser and server targets have deliberately different shapes, each matched to how it's used:
+The browser and server targets have different shapes, each matched to how it's used:
 
 | | **`BrowserExecutor`** | **`ServerExecutor`** |
 |---|---|---|
 | Session model | One executor = one iframe = one session. The iframe *is* the session. | One process serves many clients; each holds an opaque `session_id` mapped to a Puppeteer tab. |
-| Tools exposed | 6 (no `session_id`) | 8 (stateful tools take `session_id`, plus `session_start` / `session_end`) |
+| Tools exposed | 5 (no `session_id`) | 8 (stateful tools take `session_id`, plus `session_start` / `session_end`) |
 | Import | `import { IframeExecutor, MakeCodePanel } from "makecode-mcp/browser"` | `import { buildMcpServer, TabExecutor } from "makecode-mcp/server"` |
 
 Never import from `makecode-mcp/server` in browser code and vice versa.
@@ -43,7 +43,7 @@ Both targets expose the same core operations. Descriptions live in [src/shared/t
 | `get_blocks_img_from_code` | ✓ | ✓ | `{ pngBase64 }` (stateless; server emits MCP `image` content) |
 | `get_hex_file_from_code` | — | ✓ | base64 Universal Hex (stateless) |
 
-`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `session_get_blocks_img` requires prior `session_set_code` — the executor throws a descriptive error for the LLM to self-correct when the editor is empty. The browser target intentionally omits `get_hex_file_from_code`: the equivalent path is `session_set_code` + `session_get_hex_file`, which the system prompt directs the model toward.
+`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `session_get_blocks_img` requires prior `session_set_code`; if the editor is empty, the executor throws a descriptive error so the LLM can self-correct. The browser target omits `get_hex_file_from_code` on purpose. The equivalent path is `session_set_code` + `session_get_hex_file`, which the system prompt directs the model toward.
 
 ## Browser target
 
@@ -92,10 +92,10 @@ MKCP_HEADED=1 node dist/server/bin.js
 
 Notes:
 
-- Headed mode is a launch-time choice — Chromium can't be toggled mid-process, so the flag fixes visibility for the whole server lifetime.
+- Headed mode is a launch-time choice. Chromium can't be toggled mid-process, so the flag fixes visibility for the whole server lifetime.
 - Each `session_start` creates a separate OS window (via CDP `Target.createTarget({ newWindow: true })`), not just another tab in the same window.
 - `session_start` accepts an optional `label` string; in headed mode it becomes part of the window title (`MakeCode — <label> (<short-session-id>)`) so multiple concurrent sessions are easy to tell apart in the OS taskbar / Cmd-Tab. The label is ignored when headless.
-- The persistent render tab used by the stateless `get_blocks_img_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag — snippet previews never pop windows.
+- The persistent render tab used by the stateless `get_blocks_img_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag. Snippet previews never pop windows.
 
 ### Server layering
 
@@ -131,7 +131,7 @@ The bundle ships only JavaScript and relies on a system-installed Chrome (or Chr
 - **Headed mode** — show each MakeCode session in its own browser window. Off by default.
 - **Chrome executable (optional)** — explicit path to a Chrome/Chromium binary. Leave blank to auto-detect.
 
-If no Chrome install is found and no override is given, the server exits with a clear stderr message — install Google Chrome (or Chromium) and try again.
+If no Chrome install is found and no override is given, the server exits with a stderr message. Install Google Chrome (or Chromium) and try again.
 
 ## Configuring MCP clients
 
@@ -166,7 +166,7 @@ Both clients use the same `mcpServers` JSON shape. Add this entry to the relevan
 }
 ```
 
-Restart Claude Desktop after editing; the `session_start`, `session_set_code`, `session_get_blocks_img`, etc. tools appear in its tools menu. In LM Studio, start a chat with a tool-calling-capable model and enable the `makecode-mcp` server in the chat sidebar — Blocks images returned by `session_get_blocks_img*` render inline as PNGs in the conversation.
+Restart Claude Desktop after editing; the `session_start`, `session_set_code`, `session_get_blocks_img`, etc. tools appear in its tools menu. In LM Studio, start a chat with a tool-calling-capable model and enable the `makecode-mcp` server in the chat sidebar. Blocks images returned by `session_get_blocks_img*` render inline as PNGs in the conversation.
 
 ### GitHub Copilot (VS Code)
 
@@ -220,6 +220,6 @@ test/           ← Vitest (unit) + Playwright (integration) tests
 test-page/      ← manual smoke-test Vite entry for the browser target
 ```
 
-Logging uses the shared logger at [src/shared/logger.ts](src/shared/logger.ts) — one namespace per module, with previews for large payloads. Server code never writes to stdout (the MCP stdio transport owns it); the logger routes Node output to stderr.
+Logging uses the shared logger at [src/shared/logger.ts](src/shared/logger.ts): one namespace per module, with previews for large payloads. Server code never writes to stdout (the MCP stdio transport owns it); the logger routes Node output to stderr.
 
 For architectural rules and contribution guidelines see [../../AGENTS.md](../../AGENTS.md).

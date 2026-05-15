@@ -1,16 +1,8 @@
-// Lightweight namespaced logger for this POC.
-//
-// Browser: writes to console.{info,warn,error,debug} with a coloured namespace
-// prefix. Node: routes everything to console.error so the MCP stdio transport
-// keeps stdout to itself; console.error pretty-prints + stringifies its
-// arguments for free.
-//
-// Disable:
-//   - Browser: `localStorage.setItem('mkcp:log', '0')` (or `?mkcp-log=0`)
-//   - Node:    set `MKCP_LOG=0`
-//   - Tests:   auto-disabled when `VITEST` / `NODE_ENV=test` is set
-//
-// Long values (code, SVG, hex) should be passed through `preview()`.
+// Lightweight namespaced logger.
+// Browser: coloured console.{info,warn,error,debug} with a namespace prefix.
+// Node: routes everything to console.error so the MCP stdio transport keeps
+// stdout to itself. Disable via localStorage 'mkcp:log'='0', ?mkcp-log=0,
+// MKCP_LOG=0, or VITEST/NODE_ENV=test. Pass long values through `preview()`.
 
 const isNode =
   typeof process !== "undefined" && !!process.versions?.node;
@@ -55,11 +47,9 @@ export function createLogger(namespace: string): Logger {
   const prefix = `[mkcp:${namespace}]`;
   const styled: [string, string] = [`%c${prefix}`, `color:${colorFor(namespace)};font-weight:600`];
 
-  // Bind the underlying console method with the prefix already applied. The
-  // bound function preserves the user's call site in DevTools (clickable
-  // file:line), unlike a wrapping function which would point here.
-  // In Node, route everything to console.error (writes to stderr; preserves
-  // stdout for the MCP stdio transport).
+  // Bind the console method with the prefix pre-applied — preserves the
+  // caller's file:line in DevTools, unlike a wrapping function. In Node,
+  // route everything to console.error so stdout stays free for MCP stdio.
   const bind = (method: Method): (...args: unknown[]) => void => {
     if (isNode) return console.error.bind(console, prefix);
     const fn = console[method] ?? console.log;

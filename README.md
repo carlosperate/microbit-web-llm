@@ -2,17 +2,17 @@
 
 A web based AI coding chat app for the BBC micro:bit.
 
-It pairs a Small Language Model (SML) chat with a live [MakeCode](https://makecode.microbit.org/) editor instance.
-This is intended for experimentation with small models capable to run completely in the browser via WebGPU, without any server backend or API calls.
+It pairs a Small Language Model (SLM) chat with a live [MakeCode](https://makecode.microbit.org/) editor instance.
+The goal is to experiment with small models that run entirely in the browser via WebGPU, with no server backend or API calls.
 
 ## What's here
 
-To build this project we've created two main components:
+The project has two components:
 
-- **[makecode-mcp](packages/makecode-mcp/)**: A TypeScript package that provides a Model Context Protocol (MCP) server to interact with the MakeCode editor. It ships two targets:
-  - A React `MakeCodePanel` that can be embedded in any React app and that drives an embedded MakeCode editor via [@microbit/makecode-embed](https://github.com/microbit-foundation/makecode-embed) library.
-  - An [MCP](https://modelcontextprotocol.io) server using Puppeteer to drive a MakeCode editor to expose the same tools to any MCP client (Claude Desktop, LM Studio, Copilot, etc.).
-- **[app](packages/app/)**: A React web application. Split-pane UI with a [WebLLM](https://webllm.mlc.ai/) chat on the left and a live MakeCode editor on the right. Everything runs in the browser, no backend, no API proxy.
+- **[makecode-mcp](packages/makecode-mcp/)**: A TypeScript package that exposes the MakeCode editor to LLMs. It ships two targets:
+  - A React `MakeCodePanel` you can embed in any React app, driving the MakeCode editor through [@microbit/makecode-embed](https://github.com/microbit-foundation/makecode-embed).
+  - A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that uses Puppeteer to drive the same editor for any MCP client (Claude Desktop, LM Studio, Copilot, etc.).
+- **[app](packages/app/)**: A React web app. Split-pane UI with a [WebLLM](https://webllm.mlc.ai/) chat on the left and a live MakeCode editor on the right. Everything runs in the browser; no backend, no API proxy.
 
 See [packages/makecode-mcp/README.md](packages/makecode-mcp/README.md) for MCP client setup details and documentation.
 
@@ -38,31 +38,35 @@ npm run dev -w app                  # run the web app
 npm run dev:test-mcp -w makecode-mcp # build + launch MCP Inspector against the stdio server
 ```
 
-Package manager is **npm workspaces** — do not use pnpm or yarn. TypeScript project references are used across packages, so run `npm run build --workspaces` after changes in `makecode-mcp` before running `app`.
+Package manager is **npm workspaces**; do not use pnpm or yarn. TypeScript project references span the packages, so run `npm run build --workspaces` after changes in `makecode-mcp` before running `app`.
 
 ## How the pieces fit
 
 ```
-┌────────────────────────────────┐        ┌───────────────────────────┐
-│ app (WebLLM chat + MakeCode)   │        │ Any MCP client            │
-│                                │        │ (Claude Desktop, etc.)    │
-│  ChatPanel ── IframeExecutor ──┼──┐     └──────────┬────────────────┘
-│                       ▲        │  │                │ stdio
-│                       │        │  │                ▼
-│                 MakeCodePanel  │  │     ┌───────────────────────────┐
-└────────────────────────────────┘  │     │ makecode-mcp (server)     │
-                                    │     │  TabExecutor → Puppeteer  │
-              same shared tool ─────┘     │  tabs → MakeCode iframe   │
-              schemas & executor          └───────────────────────────┘
-              contract
+┌────────────────────────┐      ┌────────────────────────────┐
+│ Static web app │       │      │ Any MCP client │           │
+│ ---------------┘       │      │ ---------------┘           │
+│  ChatThread + WebLLM   │      │ e.g. Claude Desktop,       │
+│  engine + tool loop    │      │ LM Studio, Copilot, etc    │
+└───────────┬────────────┘      └──────────────┬─────────────┘
+            │ imports                          │ stdio
+┌───────────▼──────────────────────────────────▼─────────────┐
+│ makecode-mcp │                                             │
+│ -------------┘               │                             │
+│ browser: IframeExecutor      │ MCP server: TabExecutor     │
+│          + MakeCodePanel     │         + Puppeteer tab     │
+│          ─► MakeCode iframe  │         ─► MakeCode iframe  │
+│                                                            │
+│  shared: tool schemas, executor interfaces, codecs, logger │
+└────────────────────────────────────────────────────────────┘
 ```
 
 The tool schemas in [`packages/makecode-mcp/src/shared/tools.ts`](packages/makecode-mcp/src/shared/tools.ts) are the single source of truth. Both targets expose the same core operations; only the server exposes session lifecycle tools and `get_hex_file_from_code`.
 
 ## Using the MCP server with external clients
 
-The `makecode-mcp` package can be wired into Claude Desktop, GitHub Copilot (VS Code), and LM Studio as a stdio MCP server. See the [package README](packages/makecode-mcp/README.md#configuring-mcp-clients) for per-client configuration snippets. Pass `--headed` (or set `MKCP_HEADED=1`) when launching the binary to watch the editor live — see [Headed mode](packages/makecode-mcp/README.md#headed-mode-watch-the-editor-live).
+The `makecode-mcp` package can be wired into Claude Desktop, GitHub Copilot (VS Code), and LM Studio as a stdio MCP server. See the [MCP package README](packages/makecode-mcp/README.md#configuring-mcp-clients) for per-client configuration snippets.
 
 ## License
 
-This project is a research/teaching POC. See individual package manifests for dependencies' licenses.
+Licensed under the [MIT License](LICENSE).
