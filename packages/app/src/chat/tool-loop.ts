@@ -1,5 +1,5 @@
 import type { BrowserExecutor, BrowserToolName, ToolDescriptor } from "makecode-mcp/browser";
-import { TOOL, createLogger, preview } from "makecode-mcp/browser";
+import { TOOL, createLogger, encodeBlocksImage, encodeHex, preview } from "makecode-mcp/browser";
 
 const log = createLogger("tool-loop");
 
@@ -111,12 +111,12 @@ async function dispatchTool(
       await executor.setCode(args.code as string);
       return JSON.stringify({ ok: true });
     case TOOL.SESSION_GET_BLOCKS_IMG:
-      return JSON.stringify(await executor.getBlocksImage());
+      return encodeBlocksImage((await executor.getBlocksImage()).pngBase64);
     case TOOL.SESSION_GET_HEX_FILE:
-      return await executor.getHexFile();
+      return encodeHex(await executor.getHexFile());
     case TOOL.GET_BLOCKS_IMG_FROM_CODE:
-      return JSON.stringify(
-        await executor.getBlocksImageFromCode(args.code as string),
+      return encodeBlocksImage(
+        (await executor.getBlocksImageFromCode(args.code as string)).pngBase64,
       );
     default:
       throw new Error(`Unknown tool: ${name}`);

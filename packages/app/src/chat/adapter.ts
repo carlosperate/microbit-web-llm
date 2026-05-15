@@ -1,6 +1,6 @@
 import type { ChatModelAdapter, ChatModelRunOptions, ChatModelRunResult } from "@assistant-ui/react";
 import type { ThreadMessage, ThreadAssistantMessagePart } from "@assistant-ui/react";
-import { tools as TOOL_SCHEMAS, IMAGE_TOOL_NAMES } from "makecode-mcp/browser";
+import { tools as TOOL_SCHEMAS, IMAGE_TOOL_NAMES, decodeBlocksImage } from "makecode-mcp/browser";
 import type { BrowserExecutor } from "makecode-mcp/browser";
 import { createLogger, preview } from "makecode-mcp/browser";
 import { SYSTEM_PROMPT } from "./system-prompt.js";
@@ -12,17 +12,6 @@ import {
 } from "./tool-loop.js";
 
 const log = createLogger("adapter");
-
-function pngFromResult(result: string): string | null {
-  if (!result || !result.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(result);
-    const png = parsed?.pngBase64;
-    return typeof png === "string" && png.length > 0 ? png : null;
-  } catch {
-    return null;
-  }
-}
 
 export function convertMessages(messages: readonly ThreadMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
@@ -177,7 +166,7 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
             // the user sees the rendered blocks alongside the call card.
             // Mirrors what the MCP server emits as `image` content blocks.
             if (!ev.isError && IMAGE_TOOL_NAMES.has(ev.name)) {
-              const png = pngFromResult(ev.result);
+              const png = decodeBlocksImage(ev.result);
               if (png) parts.push({ type: "image", image: `data:image/png;base64,${png}` });
             }
             yield flush();

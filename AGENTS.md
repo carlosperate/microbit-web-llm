@@ -194,6 +194,10 @@ For local manual testing, run `npm run dev:test-mcp -w makecode-mcp`. This build
 
 Default MakeCode project files (`pxt.json` with `preferredEditor: "blocksprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` as `fillProjectDefaults(text, code)` and `EMPTY_EDITOR_ERROR`. Both executors and the server shim import from here — do not re-declare these constants in new code.
 
+### Shared tool-result codecs
+
+Tool-call result shapes (blocks-image JSON, hex base64, MCP content blocks, and the "too-large to feed back" stubs) live in `src/shared/tool-results.ts`. The browser tool-loop (`packages/app/src/chat/tool-loop.ts`) uses `encodeBlocksImage` / `encodeHex` to produce result strings; the MCP wrapper (`packages/makecode-mcp/src/server/mcp-server.ts`) uses `blocksImageMcpContent` / `hexFileMcpPayload`; the app history flattener (`packages/app/src/chat/webllm-engine.ts`) uses `stubImageResult` / `stubHexResult`; the chat adapter (`packages/app/src/chat/adapter.ts`) uses `decodeBlocksImage`. Do not rebuild these shapes inline.
+
 ## Package: `app`
 
 ### WebLLM setup

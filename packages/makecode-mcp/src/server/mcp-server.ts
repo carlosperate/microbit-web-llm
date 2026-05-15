@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerExecutor } from "../shared/types.js";
 import { isSessionError } from "../shared/types.js";
 import { serverToolMeta, TOOL } from "../shared/tools.js";
+import { blocksImageMcpContent, hexFileMcpPayload } from "../shared/tool-results.js";
 import { createLogger, preview } from "../shared/logger.js";
 
 const log = createLogger("mcp");
@@ -23,13 +24,12 @@ const textResult = (payload: unknown, isError = false): ToolResult => ({
 });
 
 const imageResult = (pngBase64: string): ToolResult => ({
-  content: [{ type: "image", data: pngBase64, mimeType: "image/png" }],
+  content: [blocksImageMcpContent(pngBase64)],
 });
 
-// Wraps a tool handler so SessionError surfaces as `{ isError, code }` and
-// arbitrary throws surface as `{ isError, error }`. McpServer would otherwise
-// turn a thrown error into a transport-level error, which loses our session
-// taxonomy.
+// Wraps a tool handler so SessionError surfaces as {isError, code} and other
+// throws as {isError, error}. Without this McpServer turns throws into
+// transport-level errors and we lose the session taxonomy.
 function safe(name: string, fn: () => Promise<ToolResult>) {
   return async (): Promise<ToolResult> => {
     log.info(`CallTool → ${name}`);
@@ -92,14 +92,14 @@ export function buildMcpServer(options: McpServerOptions): McpServer {
     return imageResult(pngBase64);
   });
   reg<{ session_id: string }>(TOOL.SESSION_GET_HEX_FILE, async ({ session_id }) =>
-    textResult({ hex_base64: await exec.getHexFile(session_id) }),
+    textResult(hexFileMcpPayload(await exec.getHexFile(session_id))),
   );
   reg<{ code: string }>(TOOL.GET_BLOCKS_IMG_FROM_CODE, async ({ code }) => {
     const { pngBase64 } = await exec.getBlocksImageFromCode(code);
     return imageResult(pngBase64);
   });
   reg<{ code: string }>(TOOL.GET_HEX_FILE_FROM_CODE, async ({ code }) =>
-    textResult({ hex_base64: await exec.getHexFileFromCode(code) }),
+    textResult(hexFileMcpPayload(await exec.getHexFileFromCode(code))),
   );
 
   log.info("MCP server built", { tools: Object.keys(m).length });
