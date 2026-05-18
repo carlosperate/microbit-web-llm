@@ -103,7 +103,6 @@ export function App(props: {
       const completion = await handle.promise;
       if (loadHandleRef.current !== handle) return; // superseded or cancelled
       completionRef.current = completion;
-      loadHandleRef.current = null;
       setLoadedModelId(modelId);
       setChatEpoch((n) => n + 1);
       setLoadState({ status: "ready" });

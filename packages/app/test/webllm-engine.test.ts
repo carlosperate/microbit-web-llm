@@ -1,9 +1,26 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   flattenToolHistory,
   toWebLLMMessages,
   TOOL_CONTINUATION_PROMPT,
+  loadWebLLM,
 } from "../src/chat/webllm-engine.js";
+
+// Hoisted mocks so vi.mock factory can reference them (Vitest hoists vi.mock calls
+// to the top of the file, before imports, so the factory closure must use hoisted refs).
+const { mockUnload, MockMLCEngine } = vi.hoisted(() => {
+  const mockUnload = vi.fn().mockResolvedValue(undefined);
+  const MockMLCEngine = vi.fn().mockImplementation(
+    ({ initProgressCallback: _cb }: { initProgressCallback: (r: unknown) => void }) => ({
+      reload: vi.fn().mockResolvedValue(undefined),
+      unload: mockUnload,
+      chat: { completions: { create: vi.fn() } },
+    }),
+  );
+  return { mockUnload, MockMLCEngine };
+});
+
+vi.mock("@mlc-ai/web-llm", () => ({ MLCEngine: MockMLCEngine }));
 import type { OpenAIMessage } from "../src/chat/tool-loop.js";
 import {
   encodeBlocksImage,
@@ -160,5 +177,38 @@ describe("tool-result codec round-trips (re-exported through browser entry)", ()
   it("stubs include byte length", () => {
     expect(stubImageResult(42)).toContain("42");
     expect(stubHexResult(99)).toContain("99");
+  });
+});
+
+describe("loadWebLLM LoadHandle", () => {
+  let originalNavigator: typeof globalThis.navigator;
+
+  beforeEach(() => {
+    mockUnload.mockClear();
+    MockMLCEngine.mockClear();
+    // Expose navigator.gpu so isWebGPUSupported() returns true in Node test env.
+    originalNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      value: { gpu: {} },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "navigator", {
+      value: originalNavigator,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("cancel() after a successful load calls engine.unload() exactly once", async () => {
+    const handle = loadWebLLM(vi.fn(), "test-model-id");
+    await handle.promise; // wait for successful load
+
+    handle.cancel();
+
+    expect(mockUnload).toHaveBeenCalledTimes(1);
   });
 });
