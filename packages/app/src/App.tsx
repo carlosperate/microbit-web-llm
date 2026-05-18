@@ -9,6 +9,7 @@ import { Thread } from "./chat/Thread.js";
 import { loadWebLLM, isWebGPUSupported, LoadCancelledError, MODELS, MODEL_ID, type LoadHandle, type LoadState, type ModelId } from "./chat/webllm-engine.js";
 import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
+import { ComparisonLayout } from "./comparison/ComparisonLayout.js";
 
 const log = createLogger("app");
 
@@ -217,8 +218,7 @@ export function App(props: {
   const modelLoading = loadState.status === "loading";
   const selectedModel = MODELS.find((m) => m.id === selectedModelId);
 
-  return (
-    <div className="app-shell" style={buildCssVars(settings)}>
+  const singleChatLayout = (
       <div className="app-card">
         <div className="chat-pane" data-executor-ready={executorReady ? "true" : "false"}>
           <header className="chat-header">
@@ -321,6 +321,41 @@ export function App(props: {
           )}
         </div>
       </div>
+  );
+
+  return (
+    <div className="app-shell" style={buildCssVars(settings)}>
+      {settings.comparisonMode ? (
+        <>
+          <button
+            type="button"
+            className="settings-btn comparison-settings-btn"
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-label="Open settings"
+            aria-expanded={settingsOpen}
+            data-testid="settings-toggle"
+            title="Settings"
+          >
+            <SettingsIcon />
+          </button>
+          <ComparisonLayout
+            settings={settings}
+            settingsOverlay={
+              settingsOpen ? (
+                <SettingsPanel
+                  settings={settings}
+                  onChange={handleSettingsChange}
+                  onClose={() => setSettingsOpen(false)}
+                  onResetChat={handleResetChat}
+                  onResetEditor={handleResetEditor}
+                />
+              ) : undefined
+            }
+          />
+        </>
+      ) : (
+        singleChatLayout
+      )}
     </div>
   );
 }

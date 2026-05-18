@@ -621,7 +621,7 @@ body {
   background: #fff;
   display: flex;
   flex-direction: column;
-  z-index: 4;
+  z-index: 10;
   overflow: hidden;
 }
 .settings-header {
@@ -830,4 +830,182 @@ body {
   .model-selector-btn,
   .model-load-btn,
   .model-loaded-badge { font-size: 11px; }
+}
+
+/* ── Comparison mode ─────────────────────────────────────────── */
+.comparison-settings-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 300;
+  width: 36px;
+  height: 36px;
+  background: #1f2937;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.comparison-settings-btn:hover {
+  background: #374151;
+}
+
+.comparison-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  /* align-self override because .app-shell uses align-items: center; combined
+     with overflow-x: auto the cross-axis height: 100% can collapse otherwise. */
+  align-self: stretch;
+  min-height: 100%;
+  overflow-x: auto;
+  border-radius: 16px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
+  background: var(--panel-bg);
+}
+
+/* Wraps the three chat panels so the settings overlay can anchor to it
+   (covers only chats, not the MakeCode editor — matches the single-chat layout).
+   max-width = active(440) + inactive(300) + inactive(300) so surplus width
+   flows to the MakeCode slot on wide screens. */
+/* Chats wrapper is a fixed 960px column (360 active + 300 + 300 inactive)
+   so it never grows on wide screens — surplus width all goes to MakeCode.
+   Active 360 matches the normal-view .chat-pane width for visual parity. */
+.comparison-chats {
+  display: flex;
+  flex: 0 0 960px;
+  width: 960px;
+  position: relative;
+}
+
+.chat-panel-view {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  position: relative;
+  border-right: 2px solid var(--divider);
+  transition: width 0.2s ease, border-color 0.15s;
+  overflow: hidden;
+}
+
+.chat-panel-view[data-active="true"] {
+  border-color: var(--accent);
+}
+
+/* Fixed per-panel widths driven by data-active-panel: active 360, inactive 300. */
+.comparison-container[data-active-panel="0"] .chat-panel-view[data-panel-index="0"] { width: 360px; }
+.comparison-container[data-active-panel="0"] .chat-panel-view[data-panel-index="1"] { width: 300px; }
+.comparison-container[data-active-panel="0"] .chat-panel-view[data-panel-index="2"] { width: 300px; }
+
+.comparison-container[data-active-panel="1"] .chat-panel-view[data-panel-index="0"] { width: 300px; }
+.comparison-container[data-active-panel="1"] .chat-panel-view[data-panel-index="1"] { width: 360px; }
+.comparison-container[data-active-panel="1"] .chat-panel-view[data-panel-index="2"] { width: 300px; }
+
+.comparison-container[data-active-panel="2"] .chat-panel-view[data-panel-index="0"] { width: 300px; }
+.comparison-container[data-active-panel="2"] .chat-panel-view[data-panel-index="1"] { width: 300px; }
+.comparison-container[data-active-panel="2"] .chat-panel-view[data-panel-index="2"] { width: 360px; }
+
+/* MakeCode slot fills the rest. 700px min keeps the toolbox + workspace usable;
+   below (960 + 700 = 1660px viewport) the container scrolls horizontally. */
+.comparison-makecode-slot {
+  flex: 1 1 auto;
+  min-width: 700px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.comparison-makecode-wrapper {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--makecode-blue);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.comparison-makecode-wrapper iframe {
+  flex: 1;
+  width: 100%;
+  border: 0;
+}
+
+.comparison-makecode-wrapper.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Comparison panel header */
+.comparison-panel-header {
+  height: 56px;
+  flex-shrink: 0;
+  background: linear-gradient(to right, var(--accent), var(--makecode-blue));
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.comparison-panel-header[data-active="false"] {
+  background: #4b5563;
+}
+
+.comparison-panel-title {
+  color: white;
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comparison-model-select {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 6px;
+  color: white;
+  font-size: 10px;
+  font-family: 'Space Grotesk', sans-serif;
+  padding: 2px 4px;
+  cursor: pointer;
+  max-width: 110px;
+}
+
+.comparison-model-select option {
+  background: #1f2937;
+  color: white;
+}
+
+/* Inactive panel footer with switch button */
+.comparison-inactive-footer {
+  padding: 12px;
+  border-top: 1px solid var(--divider);
+  display: flex;
+  justify-content: center;
+}
+
+.comparison-switch-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.comparison-switch-btn:hover {
+  background: var(--accent-dark);
 }

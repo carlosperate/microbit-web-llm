@@ -10,6 +10,7 @@ export interface ChatSettings {
   systemPrompt: string;
   verboseLogging: boolean;
   accentColor: AccentColor;
+  comparisonMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   systemPrompt: SYSTEM_PROMPT,
   verboseLogging: true,
   accentColor: "cyan",
+  comparisonMode: false,
 };
 
 export const TEMPERATURE_RANGE = { min: 0, max: 1.5, step: 0.05 };

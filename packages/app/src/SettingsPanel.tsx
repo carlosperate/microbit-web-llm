@@ -186,6 +186,22 @@ export function SettingsPanel({
         </section>
 
         <section className="settings-section">
+          <h3>Comparison mode</h3>
+          <label className="settings-field-inline">
+            <span>Enable comparison mode</span>
+            <input
+              type="checkbox"
+              checked={draft.comparisonMode}
+              onChange={(e) => update("comparisonMode", e.target.checked)}
+              data-testid="settings-comparison-mode"
+            />
+          </label>
+          <p className="settings-help">
+            Show three models side by side with independent chat threads. Only one model runs at a time.
+          </p>
+        </section>
+
+        <section className="settings-section">
           <h3>Reset</h3>
           <div className="settings-actions">
             <button type="button" className="settings-secondary" onClick={onResetChat}>

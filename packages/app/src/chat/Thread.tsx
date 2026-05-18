@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   ComposerPrimitive,
   MessagePrimitive,
@@ -11,7 +12,7 @@ import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { IMAGE_TOOL_NAMES } from "makecode-mcp/browser";
 
-export function Thread() {
+export function Thread({ composerSlot }: { composerSlot?: ReactNode } = {}) {
   return (
     <ThreadPrimitive.Root className="thread-root">
       <ThreadPrimitive.Viewport className="thread-viewport">
@@ -25,7 +26,7 @@ export function Thread() {
           }}
         />
       </ThreadPrimitive.Viewport>
-      <Composer />
+      {composerSlot !== undefined ? composerSlot : <Composer />}
     </ThreadPrimitive.Root>
   );
 }
