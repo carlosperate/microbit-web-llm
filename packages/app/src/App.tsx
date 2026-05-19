@@ -6,7 +6,8 @@ import { createLogger, isLoggingEnabled, setLoggingEnabled } from "makecode-mcp/
 import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
-import { loadWebLLM, isWebGPUSupported, LoadCancelledError, MODELS, MODEL_ID, type LoadHandle, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+import { MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+import { useWebLLMSlot } from "./chat/webllm-slot.js";
 import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { ComparisonLayout } from "./comparison/ComparisonLayout.js";
@@ -48,27 +49,27 @@ export function App(props: {
   /** Optional override for tests: pre-built completion function bypassing WebLLM loading. */
   mockCompletion?: ChatCompletionFn;
 }) {
-  const [loadState, setLoadState] = useState<LoadState>(
-    props.mockCompletion
-      ? { status: "ready" }
-      : isWebGPUSupported()
-        ? { status: "idle" }
-        : { status: "unsupported", reason: "WebGPU is not available. Please use Chrome 113+ on a supported GPU." },
-  );
-  const [selectedModelId, setSelectedModelId] = useState<ModelId>(MODEL_ID);
-  const [loadedModelId, setLoadedModelId] = useState<ModelId | null>(props.mockCompletion ? MODEL_ID : null);
   const [chatEpoch, setChatEpoch] = useState(0);
+  const slot = useWebLLMSlot({
+    onLoaded: () => { if (!props.mockCompletion) setChatEpoch((n) => n + 1); },
+  });
+  const [selectedModelId, setSelectedModelId] = useState<ModelId>(MODEL_ID);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef<ChatSettings>(settings);
   settingsRef.current = settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+  // completionRef is updated on every render so the adapter always calls the current fn.
   const completionRef = useRef<ChatCompletionFn | null>(props.mockCompletion ?? null);
-  const loadHandleRef = useRef<LoadHandle | null>(null);
+  if (!props.mockCompletion) completionRef.current = slot.completion;
   const executorRef = useRef<BrowserExecutor | null>(null);
   const [executorReady, setExecutorReady] = useState(false);
   const [editorLoadError, setEditorLoadError] = useState<string | null>(null);
+
+  // Derive display state: mock path bypasses slot entirely
+  const loadState: LoadState = props.mockCompletion ? { status: "ready" } : slot.loadState;
+  const loadedModelId = props.mockCompletion ? MODEL_ID : slot.loadedModelId;
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -85,69 +86,22 @@ export function App(props: {
   const loadModel = useCallback(async (modelId: ModelId) => {
     if (props.mockCompletion) return;
     log.info("loadModel requested", { modelId });
-    // Cancel any prior in-flight load — switching model mid-download must
-    // abort the previous one or two concurrent reloads race the engine.
-    loadHandleRef.current?.cancel();
-    setLoadState({ status: "loading", progress: 0, text: "Starting", modelId });
-    // Wrap progress so a cancelled/superseded load can't keep stomping the UI
-    // back into "loading" — WebLLM keeps firing events even after unload().
-    let handle: LoadHandle | null = null;
-    handle = loadWebLLM(
-      (r) => {
-        if (loadHandleRef.current !== handle) return;
-        setLoadState({ status: "loading", progress: r.progress ?? 0, text: r.text, modelId });
-      },
-      modelId,
-    );
-    loadHandleRef.current = handle;
-    try {
-      const completion = await handle.promise;
-      if (loadHandleRef.current !== handle) return; // superseded or cancelled
-      completionRef.current = completion;
-      setLoadedModelId(modelId);
-      setChatEpoch((n) => n + 1);
-      setLoadState({ status: "ready" });
-      log.info("model ready → chat thread remounted (new epoch)", { modelId });
-    } catch (err) {
-      // Superseded by a newer load (or the cancel handler already reset state).
-      // Either way, the surviving owner of UI state is whoever set
-      // loadHandleRef.current — don't trample on it.
-      if (loadHandleRef.current !== handle) return;
-      loadHandleRef.current = null;
-      if (err instanceof LoadCancelledError) {
-        log.info("model load cancelled by user", { modelId });
-        completionRef.current = null;
-        setLoadedModelId(null);
-        setLoadState({ status: "idle" });
-        return;
-      }
-      log.error("model load failed", err);
-      completionRef.current = null;
-      setLoadedModelId(null);
-      setLoadState({ status: "error", error: err instanceof Error ? err : new Error(String(err)) });
-    }
-  }, [props.mockCompletion]);
+    await slot.load(modelId);
+  }, [props.mockCompletion, slot.load]);
 
   const cancelLoad = useCallback(() => {
-    const handle = loadHandleRef.current;
-    if (!handle) return;
+    if (props.mockCompletion) return;
     log.info("user: cancel model load");
-    // Update UI synchronously so the cancel is visible even if WebLLM's load
-    // loop continues. On cache hits, fetchTensorCacheInternal's load-from-cache
-    // phase doesn't pass the abort signal, so unload() can't stop it — we let
-    // it finish in the background and discard via the handle-mismatch check
-    // in loadModel.
-    loadHandleRef.current = null;
-    completionRef.current = null;
-    setLoadedModelId(null);
-    setLoadState({ status: "idle" });
-    handle.cancel();
-  }, []);
+    slot.cancel();
+  }, [props.mockCompletion, slot.cancel]);
+
+  const loadedModelIdRef = useRef(loadedModelId);
+  loadedModelIdRef.current = loadedModelId;
 
   const ensureLoaded = useCallback(async () => {
-    if (completionRef.current && loadedModelId === selectedModelId) return;
+    if (completionRef.current && loadedModelIdRef.current === selectedModelId) return;
     await loadModel(selectedModelId);
-  }, [loadModel, loadedModelId, selectedModelId]);
+  }, [loadModel, selectedModelId]);
 
   const adapter = useMemo(
     () =>

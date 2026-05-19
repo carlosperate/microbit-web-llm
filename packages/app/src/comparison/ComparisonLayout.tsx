@@ -5,6 +5,7 @@ import { createLogger } from "makecode-mcp/browser";
 import { createChatAdapter } from "../chat/adapter.js";
 import type { ChatSettings } from "../chat/settings.js";
 import { MODELS, type ModelId } from "../chat/webllm-engine.js";
+import { useWebLLMSlot } from "../chat/webllm-slot.js";
 import { ChatPanelView } from "./ChatPanelView.js";
 
 const log = createLogger("comparison");
@@ -27,8 +28,20 @@ export function ComparisonLayout({
     MODELS[2].id,
   ]);
 
+  const slot = useWebLLMSlot();
+
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+
+  // Refs for stable access in callbacks without stale closures
+  const selectedModelIdsRef = useRef(selectedModelIds);
+  selectedModelIdsRef.current = selectedModelIds;
+  const activePanelIndexRef = useRef(activePanelIndex);
+  activePanelIndexRef.current = activePanelIndex;
+
+  // Updated on every render so adapters (created once) always call the current completion.
+  const slotCompletionRef = useRef(slot.completion);
+  slotCompletionRef.current = slot.completion;
 
   const executorRefs = useRef<[BrowserExecutor | null, BrowserExecutor | null, BrowserExecutor | null]>([
     null, null, null,
@@ -38,8 +51,10 @@ export function ComparisonLayout({
     () =>
       PANEL_INDICES.map((i) =>
         createChatAdapter({
-          completion: async () => {
-            throw new Error("No model loaded. Use 'Switch to this model' to load a model for this panel.");
+          completion: async (args) => {
+            const fn = slotCompletionRef.current;
+            if (!fn) throw new Error("No model loaded. Use 'Switch to this model' to activate this panel.");
+            return fn(args);
           },
           getExecutor: () => executorRefs.current[i],
           getSettings: () => {
@@ -57,18 +72,38 @@ export function ComparisonLayout({
     [],
   );
 
-  const handleModelChange = useCallback((panelIndex: PanelIndex, modelId: ModelId) => {
-    setSelectedModelIds((prev) => {
-      const next = [...prev] as [ModelId, ModelId, ModelId];
-      next[panelIndex] = modelId;
-      return next;
-    });
-  }, []);
+  const switchActive = useCallback(
+    async (index: PanelIndex, overrideModelId?: ModelId) => {
+      const modelId = overrideModelId ?? selectedModelIdsRef.current[index];
+      log.info("switchActive", { index, modelId });
+      setActivePanelIndex(index);
+      await slot.load(modelId);
+    },
+    [slot.load],
+  );
 
-  const handleSwitchActive = useCallback((index: PanelIndex) => {
-    log.info("switching active panel", { index });
-    setActivePanelIndex(index);
-  }, []);
+  const handleModelChange = useCallback(
+    (panelIndex: PanelIndex, modelId: ModelId) => {
+      setSelectedModelIds((prev) => {
+        const next = [...prev] as [ModelId, ModelId, ModelId];
+        next[panelIndex] = modelId;
+        return next;
+      });
+      // Update ref immediately so switchActive reads the new value on the same tick.
+      selectedModelIdsRef.current[panelIndex] = modelId;
+      if (panelIndex === activePanelIndexRef.current) {
+        void switchActive(panelIndex, modelId);
+      }
+    },
+    [switchActive],
+  );
+
+  const handleSwitchActive = useCallback(
+    (index: PanelIndex) => {
+      void switchActive(index);
+    },
+    [switchActive],
+  );
 
   const handleExecutorReady = useCallback((panelIndex: PanelIndex, executor: BrowserExecutor) => {
     log.info("executor ready", { panelIndex });
@@ -90,6 +125,7 @@ export function ComparisonLayout({
             onModelChange={(id) => handleModelChange(i, id)}
             onSwitchActive={() => handleSwitchActive(i)}
             adapter={adapters[i]}
+            loadState={i === activePanelIndex ? slot.loadState : undefined}
           />
         ))}
         {settingsOverlay}

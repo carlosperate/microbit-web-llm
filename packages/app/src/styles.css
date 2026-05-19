@@ -986,7 +986,13 @@ body {
 
 /* Inactive panel footer with switch button */
 .comparison-inactive-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
   padding: 12px;
+  background: var(--panel-bg);
   border-top: 1px solid var(--divider);
   display: flex;
   justify-content: center;
