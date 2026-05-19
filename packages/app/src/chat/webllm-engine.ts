@@ -13,6 +13,7 @@ import {
   stubHexResult,
   stubImageResult,
 } from "makecode-mcp/browser";
+import { DEFAULT_MODEL_ID } from "../config.js";
 
 /** WebLLM's accepted message shape — the union of system / user / assistant /
  *  tool variants from the OpenAI-compatible protocol. Our `OpenAIMessage` is a
@@ -39,37 +40,6 @@ export function toWebLLMMessages(messages: OpenAIMessage[]): WebLLMMessage[] {
 
 const log = createLogger("webllm");
 
-// All models go through the same grammar-constrained path: system prompt
-// describing the tools + `response_format` forcing a JSON array of
-// `{name, arguments}`. WebLLM's native Hermes-2-Pro path is bypassed — its
-// injected prompt omits the `<tool_call></tool_call>` wrapper Hermes-3 was
-// trained on, so Hermes-3 emits bare JSON the parser then rejects.
-export const MODEL_ID = "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC";
-
-export const MODELS = [
-  {
-    id: "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",
-    shortLabel: "Qwen2.5-Coder 7B",
-    label: "Qwen2.5-Coder 7B Instruct (coder-tuned)",
-  },
-  {
-    id: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
-    shortLabel: "Hermes-3 8B",
-    label: "Hermes-3 Llama 3.1 8B",
-  },
-  {
-    id: "Qwen3-8B-q4f16_1-MLC",
-    shortLabel: "Qwen3 8B",
-    label: "Qwen3 8B",
-  },
-  {
-    id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",
-    shortLabel: "Llama-3.1 8B",
-    label: "Llama-3.1 8B Instruct",
-  },
-] as const;
-
-export type ModelId = (typeof MODELS)[number]["id"];
 
 // JSON schema for one tool call; an array of these is the grammar we constrain
 // the model to. Shape matches Hermes-2-Pro's officialHermes2FunctionCallSchema.
@@ -230,7 +200,7 @@ export type LoadHandle = {
 
 export function loadWebLLM(
   onProgress: (r: InitProgressReport) => void,
-  modelId: string = MODEL_ID,
+  modelId: string = DEFAULT_MODEL_ID,
 ): LoadHandle {
   let cancelFn: () => void = () => {
     // No-op until the engine is constructed; the `cancelled` flag below makes

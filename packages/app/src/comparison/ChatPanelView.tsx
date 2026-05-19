@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { AssistantRuntimeProvider, type AssistantRuntime, type ChatModelAdapter, useLocalRuntime } from "@assistant-ui/react";
 import { Thread } from "../chat/Thread.js";
-import { MODELS, type LoadState, type ModelId } from "../chat/webllm-engine.js";
+import { type LoadState } from "../chat/webllm-engine.js";
+import { MODELS, type ModelId } from "../config.js";
 import type { PanelIndex } from "./ComparisonLayout.js";
 
 export interface ChatPanelViewProps {

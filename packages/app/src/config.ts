@@ -1,5 +1,47 @@
 import { TOOL } from "makecode-mcp/browser";
 
+// ── Models ──────────────────────────────────────────────────────────────────
+// To add a model: append a { id, shortLabel, label } entry. The engine and UI
+// pick it up automatically — no other changes needed.
+export const MODELS = [
+  {
+    id: "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",
+    shortLabel: "Qwen2.5-Coder 7B",
+    label: "Qwen2.5-Coder 7B Instruct (coder-tuned)",
+  },
+  {
+    id: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
+    shortLabel: "Hermes-3 8B",
+    label: "Hermes-3 Llama 3.1 8B",
+  },
+  {
+    id: "Qwen3-8B-q4f16_1-MLC",
+    shortLabel: "Qwen3 8B",
+    label: "Qwen3 8B",
+  },
+  {
+    id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",
+    shortLabel: "Llama-3.1 8B",
+    label: "Llama-3.1 8B Instruct",
+  },
+] as const;
+
+export type ModelId = (typeof MODELS)[number]["id"];
+
+/** Default model on first visit. Must be an entry in {@link MODELS}. */
+export const DEFAULT_MODEL_ID: ModelId = MODELS[0].id;
+
+// ── Comparison mode prefab prompts ──────────────────────────────────────────
+// Shown in the dropdown above the shared opener bar in comparison mode.
+export const PREFAB_PROMPTS = [
+  "Show a smiley face on start",
+  "Count from 0 to 9 when button A is pressed",
+  "Show a heart when button A is pressed, otherwise a happy face",
+  "Make a step counter using the accelerometer",
+  "Blink an LED on and off forever",
+] as const;
+
+// ── System prompt ────────────────────────────────────────────────────────────
 export const SYSTEM_PROMPT = `You are a micro:bit coding assistant. The student is using the MakeCode block/TypeScript editor, which is open on the right-hand side of their screen.
 
 IMPORTANT — tool-calling behaviour:

@@ -215,6 +215,19 @@ Tool-call result shapes (blocks-image JSON, hex base64, MCP content blocks, and 
 
 ## Package: `app`
 
+### App configuration (`config.ts`)
+
+`packages/app/src/config.ts` is the single file for content that is likely to be edited without touching component or engine code:
+
+- **`MODELS`** — the list of user-selectable models. To add a model, append a `{ id, shortLabel, label }` entry; the engine and UI pick it up automatically.
+- **`DEFAULT_MODEL_ID`** — which model is pre-selected on first visit. Must be one of the `id` values from `MODELS`.
+- **`PREFAB_PROMPTS`** — the built-in prompt suggestions shown in the comparison-mode opener bar.
+- **`SYSTEM_PROMPT`** — the system prompt sent to the LLM at the start of every conversation.
+
+All other code (`webllm-engine.ts`, `ComparisonLayout.tsx`, `adapter.ts`, `settings.ts`) imports these from `config.ts` rather than defining them locally. `ModelId` is also exported from `config.ts` as the derived union type of model ids.
+
+When changing the system prompt, also update `packages/app/test/system-prompt.test.ts` (see "Keep tests and docs in sync").
+
 ### WebLLM setup
 
 The app ships with a user-selectable model picker (`MODELS` in `webllm-engine.ts`). The current options are:
@@ -224,7 +237,7 @@ The app ships with a user-selectable model picker (`MODELS` in `webllm-engine.ts
 - **Qwen3 8B** (`Qwen3-8B-q4f16_1-MLC`).
 - **Llama-3.1 8B Instruct** (`Llama-3.1-8B-Instruct-q4f16_1-MLC`).
 
-All models share the same tool-calling path in `webllm-engine.ts`: inject a system prompt describing the tools, grammar-constrain output via `response_format` to a JSON array of `{name, arguments}` objects, and parse the streamed JSON into synthetic `tool_calls` deltas. When the schema-constrained output is `[]`, `tool-loop.ts` makes one follow-up call with `tools: []` so the model can stream a plain-text reply. To add a new model, append a `{ id, shortLabel, label }` entry to `MODELS` — no engine changes required.
+All models share the same tool-calling path in `webllm-engine.ts`: inject a system prompt describing the tools, grammar-constrain output via `response_format` to a JSON array of `{name, arguments}` objects, and parse the streamed JSON into synthetic `tool_calls` deltas. When the schema-constrained output is `[]`, `tool-loop.ts` makes one follow-up call with `tools: []` so the model can stream a plain-text reply. To add a new model, append a `{ id, shortLabel, label }` entry to `MODELS` in `config.ts` — no engine changes required.
 
 WebLLM's built-in Hermes-2-Pro native path is deliberately bypassed. Its injected prompt omits the `<tool_call></tool_call>` wrapper instruction Hermes-3 was trained on, so Hermes-3 emits bare JSON or markdown that WebLLM's parser then rejects. Owning the prompt and parser end-to-end gives reliable behaviour across every model in the picker.
 

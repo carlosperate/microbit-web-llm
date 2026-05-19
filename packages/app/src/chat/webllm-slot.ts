@@ -5,8 +5,8 @@ import {
   LoadCancelledError,
   type LoadHandle,
   type LoadState,
-  type ModelId,
 } from "./webllm-engine.js";
+import type { ModelId } from "../config.js";
 import type { ChatCompletionFn } from "./tool-loop.js";
 import { createLogger } from "makecode-mcp/browser";
 

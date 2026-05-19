@@ -5,7 +5,7 @@ import type { BrowserExecutor } from "makecode-mcp/browser";
 import { createLogger, preview } from "makecode-mcp/browser";
 import { createChatAdapter } from "../chat/adapter.js";
 import type { ChatSettings } from "../chat/settings.js";
-import { MODELS, type ModelId } from "../chat/webllm-engine.js";
+import { MODELS, type ModelId, PREFAB_PROMPTS } from "../config.js";
 import { useWebLLMSlot } from "../chat/webllm-slot.js";
 import { ChatPanelView } from "./ChatPanelView.js";
 
@@ -14,13 +14,6 @@ const log = createLogger("comparison");
 export const PANEL_INDICES = [0, 1, 2] as const;
 export type PanelIndex = (typeof PANEL_INDICES)[number];
 
-export const PREFAB_PROMPTS = [
-  "Show a smiley face on start",
-  "Count from 0 to 9 when button A is pressed",
-  "Show a heart when button A is pressed, otherwise a happy face",
-  "Make a step counter using the accelerometer",
-  "Blink an LED on and off forever",
-] as const;
 
 export function ComparisonLayout({
   settings,

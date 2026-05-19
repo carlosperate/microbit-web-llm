@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SYSTEM_PROMPT } from "../src/chat/system-prompt.js";
+import { SYSTEM_PROMPT } from "../src/config.js";
 
 describe("SYSTEM_PROMPT", () => {
   it("tells the LLM it is a micro:bit coding assistant", () => {

@@ -3,7 +3,7 @@ import type { ThreadMessage, ThreadAssistantMessagePart } from "@assistant-ui/re
 import { tools as TOOL_SCHEMAS, IMAGE_TOOL_NAMES, decodeBlocksImage } from "makecode-mcp/browser";
 import type { BrowserExecutor } from "makecode-mcp/browser";
 import { createLogger, preview } from "makecode-mcp/browser";
-import { SYSTEM_PROMPT } from "./system-prompt.js";
+import { SYSTEM_PROMPT } from "../config.js";
 import {
   runToolLoop,
   type ChatCompletionFn,

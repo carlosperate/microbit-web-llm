@@ -1,4 +1,4 @@
-import { SYSTEM_PROMPT } from "./system-prompt.js";
+import { SYSTEM_PROMPT } from "../config.js";
 
 export type AccentColor = "cyan" | "teal" | "magenta";
 

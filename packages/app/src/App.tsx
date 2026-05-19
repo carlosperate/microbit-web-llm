@@ -6,7 +6,8 @@ import { createLogger, isLoggingEnabled, setLoggingEnabled } from "makecode-mcp/
 import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
-import { MODELS, MODEL_ID, type LoadState, type ModelId } from "./chat/webllm-engine.js";
+import { type LoadState } from "./chat/webllm-engine.js";
+import { MODELS, DEFAULT_MODEL_ID, type ModelId } from "./config.js";
 import { useWebLLMSlot } from "./chat/webllm-slot.js";
 import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
@@ -53,7 +54,7 @@ export function App(props: {
   const slot = useWebLLMSlot({
     onLoaded: () => { if (!props.mockCompletion) setChatEpoch((n) => n + 1); },
   });
-  const [selectedModelId, setSelectedModelId] = useState<ModelId>(MODEL_ID);
+  const [selectedModelId, setSelectedModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_SETTINGS);
   const settingsRef = useRef<ChatSettings>(settings);
   settingsRef.current = settings;
@@ -70,7 +71,7 @@ export function App(props: {
 
   // Derive display state: mock path bypasses slot entirely
   const loadState: LoadState = props.mockCompletion ? { status: "ready" } : slot.loadState;
-  const loadedModelId = props.mockCompletion ? MODEL_ID : slot.loadedModelId;
+  const loadedModelId = props.mockCompletion ? DEFAULT_MODEL_ID : slot.loadedModelId;
 
   // Close model dropdown on outside click
   useEffect(() => {
