@@ -58,6 +58,7 @@ export function App(props: {
   const settingsRef = useRef<ChatSettings>(settings);
   settingsRef.current = settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => { if (settings.comparisonMode) setSettingsOpen(false); }, [settings.comparisonMode]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   // completionRef is updated on every render so the adapter always calls the current fn.

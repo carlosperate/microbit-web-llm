@@ -1,4 +1,5 @@
-import { AssistantRuntimeProvider, type ChatModelAdapter, useLocalRuntime } from "@assistant-ui/react";
+import { useEffect, useRef } from "react";
+import { AssistantRuntimeProvider, type AssistantRuntime, type ChatModelAdapter, useLocalRuntime } from "@assistant-ui/react";
 import { Thread } from "../chat/Thread.js";
 import { MODELS, type LoadState, type ModelId } from "../chat/webllm-engine.js";
 import type { PanelIndex } from "./ComparisonLayout.js";
@@ -11,6 +12,9 @@ export interface ChatPanelViewProps {
   onSwitchActive: () => void;
   adapter: ChatModelAdapter;
   loadState?: LoadState;
+  runtimeRef?: { current: AssistantRuntime | null };
+  onHasMessages?: (hasMessages: boolean) => void;
+  hideComposer?: boolean;
 }
 
 export function ChatPanelView({
@@ -21,24 +25,46 @@ export function ChatPanelView({
   onSwitchActive,
   adapter,
   loadState,
+  runtimeRef,
+  onHasMessages,
+  hideComposer,
 }: ChatPanelViewProps) {
   const runtime = useLocalRuntime(adapter);
   const selectedModel = MODELS.find((m) => m.id === modelId);
   const isLoading = isActive && loadState?.status === "loading";
   const loadProgress = loadState?.status === "loading" ? Math.round((loadState.progress ?? 0) * 100) : 0;
 
-  const inactiveComposer = (
-    <div className="comparison-inactive-footer">
-      <button
-        type="button"
-        className="comparison-switch-btn"
-        onClick={onSwitchActive}
-        data-testid={`switch-active-${index}`}
-      >
-        Switch to this model
-      </button>
-    </div>
-  );
+  // Use a ref so the subscribe callback always sees the latest onHasMessages
+  // without needing to re-subscribe on every render.
+  const onHasMessagesRef = useRef(onHasMessages);
+  onHasMessagesRef.current = onHasMessages;
+
+  useEffect(() => {
+    if (runtimeRef) runtimeRef.current = runtime;
+    const report = () => onHasMessagesRef.current?.(runtime.thread.getState().messages.length > 0);
+    report();
+    return runtime.thread.subscribe(report);
+  // runtimeRef is a stable ref object; runtime is stable from useLocalRuntime.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtime, runtimeRef]);
+
+  let composerSlot: React.ReactNode;
+  if (!hideComposer && !isActive) {
+    composerSlot = (
+      <div className="comparison-inactive-footer">
+        <button
+          type="button"
+          className="comparison-switch-btn"
+          onClick={onSwitchActive}
+          data-testid={`switch-active-${index}`}
+        >
+          Switch to this model
+        </button>
+      </div>
+    );
+  } else if (hideComposer) {
+    composerSlot = null;
+  }
 
   return (
     <div
@@ -62,7 +88,7 @@ export function ChatPanelView({
       </header>
       <div className="chat-body">
         <AssistantRuntimeProvider runtime={runtime}>
-          <Thread composerSlot={isActive ? undefined : inactiveComposer} />
+          <Thread composerSlot={composerSlot} />
         </AssistantRuntimeProvider>
         {isLoading && (
           <div className="model-gate-overlay" data-testid="comparison-load-overlay">

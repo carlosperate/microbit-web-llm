@@ -1,6 +1,12 @@
 # AGENTS.md
 
-This file provides context and instructions for AI agents working on this repository.
+This file is the working spec for AI agents working on this repository. Sections roughly map to subsystems; consult the relevant one before changing code in that area, and update this file in the same commit when you change something it describes (see "Keep tests and docs in sync").
+
+**Map:**
+- *Cross-cutting rules* — TDD, doc/test sync, logging conventions, no-shared-state, executor interfaces, tool semantics.
+- *Package: `makecode-mcp`* — both build targets (browser + server), MCP shell, server layering, shared codecs.
+- *Package: `app`* — WebLLM tool loop, history flattening, system prompt, comparison mode.
+- *What Not To Do* — common traps that previously bit us.
 
 ## Project Summary
 
@@ -9,7 +15,7 @@ This is a monorepo for **MakeCode MCP** — a TypeScript library and companion w
 The repo has two packages:
 
 - **`packages/makecode-mcp`** — the core library. Owns all MakeCode integration. Has two build targets: `browser` (React + postMessage) and `server` (Node.js + Puppeteer + MCP protocol).
-- **`packages/app`** — a React + Vite web app. Split-pane UI: WebLLM chat on the left, MakeCode iframe on the right.
+- **`packages/app`** — a React + Vite web app. Single-chat mode is a split-pane UI (WebLLM chat left, MakeCode iframe right). Comparison mode adds a three-panel layout for evaluating models side-by-side against the same prompt.
 
 Use `README.md` for monorepo setup and package overviews, and `packages/makecode-mcp/README.md` for MCP client configuration and server usage details.
 
@@ -84,14 +90,16 @@ Skip doc/test updates only for changes that are genuinely invisible from outside
 
 ### No shared state between chat and editor panels
 
-The only connection between `ChatPanel` and `MakeCodePanel` in the app is the `IframeExecutor` instance passed as a prop. Do not introduce a global store, context, or event bus for this. Keep it a direct dependency.
+The only connection between a chat surface and its `MakeCodePanel` is the `IframeExecutor` instance passed in as a prop. Do not introduce a global store, context, or event bus for this — keep it a direct dependency.
+
+This holds in both layouts: single-chat passes one executor to one chat; comparison mode keeps a per-panel `executorRefs[i]` in `ComparisonLayout` and exposes it to each panel's adapter via the adapter's `getExecutor()` closure (no cross-panel store). The only thing comparison panels share is the active WebLLM completion via `slotCompletionRef`, which is a controlled, ref-mediated read of the *single* `useWebLLMSlot` — see "Comparison mode" under Package: app.
 
 ### Verbose logging is part of the contract
 
 This is a POC for teaching and research; a live trace of what the system is doing is how the developer (and student observers) debug it. Logging is enabled by default and must stay that way.
 
 - Use the shared logger from `packages/makecode-mcp/src/shared/logger.ts`. Import via `makecode-mcp/browser` or `makecode-mcp/server` — never hand-roll `console.log` prefixes or instantiate a second logger.
-- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces include `app`, `adapter`, `tool-loop`, `webllm`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool`, `browser-pool` — reuse these when extending the same area.
+- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces: `app`, `adapter`, `tool-loop`, `webllm` (shared by `webllm-engine.ts` and `webllm-slot.ts` — same area), `comparison`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool`, `browser-pool`. Reuse these when extending the same area.
 - Log the lifecycle events a reader needs to follow the flow: entry/exit of a run, each tool-loop step with `finish_reason` and pending-call count, every tool dispatch with args summary + result size, stall detection and recovery, errors. If you add a new tool case, log both the request and the result.
 - Use `preview(value, maxChars?)` for anything that can be large (code, PNG base64, hex, JSON blobs). Never dump raw multi-kB strings to the console.
 - Use `log.time(label)` (returns an end-fn) to instrument any async boundary a user might suspect of hanging — model load, tool dispatch, completion stream.
@@ -222,7 +230,17 @@ WebLLM's built-in Hermes-2-Pro native path is deliberately bypassed. Its injecte
 
 The dropdown shows each model's `shortLabel`; the full `label` appears in the loading overlay while the download runs. A **Load model** button next to the dropdown triggers the download explicitly; while loading it is disabled and the composer input + send button are disabled with a "Load a model to begin" notice in the thread viewport. When the selected model finishes loading, the button is replaced by a "model loaded" pill. If the user changes the dropdown after loading, the pill flips back to the button so they can load the new choice.
 
-Changing models **resets the chat**. The chat subtree (`ChatThread`) owns its own `useLocalRuntime` and is keyed on a `chatEpoch` counter that bumps each time a model finishes loading — remounting it yields a fresh, empty thread. `MakeCodePanel` lives above that boundary, so the iframe, its loaded code, and any open MakeCode session persist across model switches.
+### `useWebLLMSlot` owns the load lifecycle
+
+The model-load state machine lives in `packages/app/src/chat/webllm-slot.ts` as a `useWebLLMSlot({ onLoaded? })` hook returning `{ completion, completionRef, loadState, loadedModelId, load, cancel }`. `completion` is the render-snapshot value; `completionRef` is the hook's internal ref, updated immediately when the model loads (before React re-renders) — use `completionRef` in closures that run right after `load()` resolves. It internalises:
+
+- The `LoadHandle` cancellation-via-mismatch pattern (a superseded load's progress + result are silently dropped so the active load owns UI state).
+- The `LoadCancelledError` branch (user cancel resets to `idle`, not `error`).
+- **GPU buffer freeing on switch**: `load(B)` calls `cancel()` on any prior handle before starting B; `cancel()` invokes `engine.unload()` and the underlying `loadWebLLM` reuses the same lambda whether the handle was in-flight or already completed. Without this, switching models would leak the prior model's GPU buffers until the next reload overwrote them.
+
+Both `App.tsx` (single-chat) and `ComparisonLayout` (comparison mode) consume this hook — but only `App.tsx` passes an `onLoaded` callback. The hook does NOT bump the chat epoch itself: callers decide whether a new load should reset their thread (single-chat: yes; comparison: no — per-panel threads persist across switches).
+
+Changing models in single-chat mode therefore **resets the chat**. The chat subtree (`ChatThread`) owns its own `useLocalRuntime` and is keyed on a `chatEpoch` counter that bumps each time `useWebLLMSlot.onLoaded` fires — remounting yields a fresh, empty thread. `MakeCodePanel` lives above that boundary, so the iframe, its loaded code, and any open MakeCode session persist across model switches.
 
 This requires WebGPU (Chrome 113+). Show a clear loading progress indicator on first load — the model is ~4–5 GB and is cached in the browser's Cache API after the first download.
 
@@ -275,6 +293,56 @@ The system prompt must tell the LLM:
 
 The browser prompt must not mention `session_start` / `session_end` / `session_id` — those belong to the server target and are irrelevant here.
 
+### Comparison mode
+
+Toggled from settings (`comparisonMode: boolean` in `ChatSettings`). Purpose: evaluate which small model is the most useful as a micro:bit coding assistant by running three independent threads side-by-side. At 7–8B q4f16 sizes, response variance is high; the useful comparison metric is how much hand-holding each model needs to reach a working program, not exact same-input parity.
+
+**Topology**
+
+- Three `ChatPanelView` instances (one per index in `PANEL_INDICES = [0, 1, 2]` from `comparison/ComparisonLayout.tsx`). Each owns its own `useLocalRuntime` and adapter; threads persist across model switches.
+- Three `MakeCodePanel` iframes are mounted simultaneously in the rightmost slot. Only the active one is visible (`opacity: 0; pointer-events: none` on the others). **Do not use `display: none`** — it would trigger an iframe reload, losing editor state.
+- Exactly one `useWebLLMSlot` instance lives in `ComparisonLayout` and serves the active panel only. Switching panels = `engine.unload()` + `engine.reload(otherId)` (~3–5 s from disk cache, no re-download). Only the active model is in GPU.
+- All three adapters share the slot's current completion via `slotCompletionRef` (aliased from `slot.completionRef`, the hook's internal ref — updated immediately on model load, before React re-renders). Inactive panels can't actually run inference because their composer is replaced with a "Switch to this model" button — see `Thread.composerSlot` below.
+- App-level `App.tsx` branches on `settings.comparisonMode`. The single-chat JSX is kept as an **inlined `singleChatLayout` const**, NOT a nested function component — a nested function would be a fresh component type on every render, remounting `MakeCodePanel` and reloading the iframe on every state change.
+
+**`Thread.composerSlot`**
+
+`packages/app/src/chat/Thread.tsx` accepts an optional `composerSlot?: ReactNode` prop. When provided, it replaces the default `<Composer />`. `ChatPanelView` uses it in two cases: inactive panels (renders a "Switch to this model" button) and `hideComposer={true}` (passes `null` to suppress the composer entirely while the shared opener bar is active). When omitted, the default composer renders — single-chat mode is untouched.
+
+The "Switch to this model" button must be `position: absolute; bottom: 0` like `.composer`, because `.thread-viewport` has `height: 100%` — a static-flow footer would render below the viewport and be invisible.
+
+**`switchActive` and model-change semantics**
+
+- Clicking "Switch to this model" on an inactive panel → `switchActive(index)` → sets `activePanelIndex` synchronously and awaits `slot.load(selectedModelIds[index])`.
+- Changing the dropdown on the *active* panel → `handleModelChange` calls `switchActive(panelIndex, newModelId)` directly with the new ID (avoids a stale-closure read of `selectedModelIds` state, since state updates haven't flushed yet).
+- Changing the dropdown on an *inactive* panel → updates that slot's `selectedModelIds[i]` only; no load.
+- Mid-switch re-entry into `switchActive` is safe: `slot.load()` always cancels the prior handle first (the same mechanism that frees GPU buffers — see `useWebLLMSlot`).
+
+**Settings**
+
+The settings overlay is shared in v1 (single instance, single state). In comparison mode, `App.tsx` renders a floating `.comparison-settings-btn` (position: fixed, top-right) and passes the `<SettingsPanel>` JSX as a `settingsOverlay` prop into `ComparisonLayout`. The overlay anchors to `.comparison-chats` (which is `position: relative`), so it covers only the chat columns and leaves the MakeCode editor visible — matching single-chat behaviour. A `useEffect` in `App.tsx` closes the settings panel automatically whenever `settings.comparisonMode` becomes true.
+
+**State reset on mode toggle**
+
+There is no reset action in comparison mode. Toggling the setting off and back on is the implicit reset (per-panel state is fresh on every mode entry and every page load — no localStorage persistence). The three panel dropdowns default to `MODELS[0..2]`; duplicates are allowed.
+
+**Shared opener (broadcast)**
+
+When `showOpenerBar` is true (`allThreadsEmpty && !broadcastPending`), a `.comparison-opener-bar` div is rendered at the bottom of `.comparison-chats`, below `.comparison-panels-row`, spanning all three panels. It contains a prefab-prompts dropdown (`PREFAB_PROMPTS` at module scope in `ComparisonLayout.tsx`) and a shared prompt input. All three panels receive `hideComposer={showOpenerBar}` — this suppresses both the active panel's normal composer and the inactive panels' "Switch to this model" buttons while the bar is visible, so the bar is the only input on screen.
+
+Clicking "Send to all" immediately sets `broadcastPending = true` (hiding the bar before any model starts loading), then fans out *sequentially* — for `i` in `PANEL_INDICES`: set `activePanelIndex = i`, `await slot.load(selectedModelIds[i])`, programmatically append the user message to panel `i`'s runtime and await the full turn via `runtime.thread.unstable_on("runEnd", …)`. After the loop `broadcastPending` resets to false, but by then `allThreadsEmpty` is false too so the bar never reappears. The gate `allThreadsEmpty` is derived from `threadHasMessages: [boolean, boolean, boolean]` state in `ComparisonLayout`, updated via `onHasMessages` callbacks that subscribe to `runtime.thread.getState().messages.length` per panel.
+
+There is no mid-broadcast cancel button. The user can refresh the page; the broadcast takes ~30–60 s total. Implicit cancellation works if the user clicks a different panel's switch button mid-broadcast — `slot.load()` cancels the prior handle.
+
+**Out of scope (do NOT add)**
+
+- Per-panel temperature / system-prompt / sampling overrides.
+- Per-panel reset buttons (mode toggle is the reset).
+- localStorage persistence of threads or model selections.
+- Background prewarm of inactive models (only the active model is in GPU).
+- Three concurrent engine instances. This was considered and rejected — the current single-slot design is simpler and the unified-memory swap cost (~3–5 s) is acceptable. If you find yourself adding a `slots: WebLLMSlot[]` array, stop and surface it.
+- Automated comparison metrics (turn count, success markers).
+
 
 ## What Not To Do
 
@@ -282,3 +350,7 @@ The browser prompt must not mention `session_start` / `session_end` / `session_i
 - Do not share executor state between multiple chat sessions. Each page load is a fresh session.
 - Do not duplicate tool schema definitions. They live in `shared/tools.ts` only.
 - Do not duplicate MakeCode project defaults. They live in `shared/project-defaults.ts` only.
+- Do not use `display: none` to hide an inactive MakeCode iframe in comparison mode — it triggers a full reload. Use `opacity: 0; pointer-events: none` instead.
+- Do not nest `singleChatLayout` as a function component in `App.tsx`. A nested function is a fresh component type on every render and would remount `MakeCodePanel`, flashing the editor on every state change. Keep it an inlined JSX expression.
+- Do not introduce three concurrent `WebLLMSlot` instances for comparison mode (one per panel). The single-slot + reload-on-switch design is intentional — see "Out of scope" under Comparison mode.
+- Do not reintroduce `Promise.all` for tool-call batches. Sequential dispatch in emission order is intentional — see Tool-call loop.

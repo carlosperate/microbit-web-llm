@@ -879,9 +879,16 @@ body {
    Active 360 matches the normal-view .chat-pane width for visual parity. */
 .comparison-chats {
   display: flex;
+  flex-direction: column;
   flex: 0 0 960px;
   width: 960px;
   position: relative;
+}
+
+.comparison-panels-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .chat-panel-view {
@@ -1015,3 +1022,65 @@ body {
 .comparison-switch-btn:hover {
   background: var(--accent-dark);
 }
+
+/* Opener bar — spans all three panels when all threads are empty */
+.comparison-opener-bar {
+  flex-shrink: 0;
+  padding: 10px 16px 12px;
+  background: var(--panel-bg);
+  border-top: 2px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.comparison-opener-prefab {
+  width: 100%;
+  background: white;
+  border: 1.5px solid var(--accent-border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: 'Space Grotesk', sans-serif;
+  color: #4b5563;
+  cursor: pointer;
+  outline: none;
+}
+
+.comparison-opener-prefab:focus { border-color: var(--accent); }
+
+.comparison-opener-inner {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: white;
+  border: 1.5px solid var(--accent-border);
+  border-radius: 14px;
+  padding: 5px 8px 5px 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  transition: border-color 0.15s;
+}
+
+.comparison-opener-inner:focus-within { border-color: var(--accent); }
+
+.comparison-send-all-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  height: 36px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Space Grotesk', sans-serif;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.comparison-send-all-btn:disabled { opacity: 0.4; cursor: default; }
+.comparison-send-all-btn:not(:disabled):hover { background: var(--accent-dark); }

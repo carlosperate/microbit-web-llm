@@ -14,6 +14,10 @@ const log = createLogger("webllm");
 
 export type WebLLMSlot = {
   completion: ChatCompletionFn | null;
+  /** Ref to the completion fn — updated immediately when the model loads, before
+   *  React re-renders. Use this in closures that run right after `load()` resolves
+   *  (e.g. broadcastSend) to avoid reading a stale snapshot from the last render. */
+  completionRef: { readonly current: ChatCompletionFn | null };
   loadState: LoadState;
   loadedModelId: ModelId | null;
   load: (modelId: ModelId) => Promise<void>;
@@ -83,6 +87,7 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
 
   return {
     completion: completionRef.current,
+    completionRef,
     loadState,
     loadedModelId,
     load,
