@@ -1,0 +1,199 @@
+<!doctype html>
+<!-- makecode-blocks-viewer:v1 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MakeCode Blocks</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #fff; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #333;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 120px;
+      }
+      #viewer { max-width: 100%; padding: 0.5rem; box-sizing: border-box; }
+      #viewer img { display: block; max-width: 100%; height: auto; }
+      .status { padding: 1rem; color: #888; font-size: 0.9rem; text-align: center; }
+      .status.err { color: #c33; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"><div class="status">Connecting to host…</div></div>
+    <script>
+      // Minimal MCP Apps (SEP-1865) client. The widget runs inside the host's
+      // sandbox-proxy iframe (see `sandbox_proxy.html` in MCP Inspector / the
+      // equivalent on Claude Desktop). The proxy is a transparent JSON-RPC
+      // relay: messages we post to `window.parent` reach the host, and host
+      // messages arrive as `message` events from `window.parent`.
+      //
+      // We hand-roll the minimum subset of the protocol rather than depending
+      // on `@modelcontextprotocol/ext-apps` (a 337KB bundle) — for this
+      // use-case we only need:
+      //   1. send `ui/initialize` request → await response
+      //   2. send `ui/notifications/initialized`
+      //   3. receive `ui/notifications/tool-result` and render the image
+      //   4. send `ui/notifications/size-changed` when the body grows
+      //      (otherwise hosts default the iframe to a small fixed height)
+      // Plus a stub `ping` responder so the host's keep-alive doesn't time out.
+      (function () {
+        var PROTOCOL_VERSION = "2026-01-26";
+
+        var viewer = document.getElementById("viewer");
+        var nextRequestId = 1;
+        var pending = Object.create(null);
+
+        function send(msg) {
+          window.parent.postMessage(msg, "*");
+        }
+        function request(method, params) {
+          var id = nextRequestId++;
+          return new Promise(function (resolve, reject) {
+            pending[id] = { resolve: resolve, reject: reject };
+            send({ jsonrpc: "2.0", id: id, method: method, params: params });
+          });
+        }
+        function notify(method, params) {
+          send({ jsonrpc: "2.0", method: method, params: params });
+        }
+
+        function setStatus(text, isError) {
+          while (viewer.firstChild) viewer.removeChild(viewer.firstChild);
+          var s = document.createElement("div");
+          s.className = "status" + (isError ? " err" : "");
+          s.textContent = text;
+          viewer.appendChild(s);
+        }
+        function renderImage(b64, mimeType) {
+          while (viewer.firstChild) viewer.removeChild(viewer.firstChild);
+          var img = document.createElement("img");
+          img.alt = "MakeCode blocks rendered from TypeScript";
+          img.src = "data:" + (mimeType || "image/png") + ";base64," + b64;
+          // Intrinsic dimensions are unknown until decode — re-measure then.
+          img.onload = reportSize;
+          viewer.appendChild(img);
+        }
+
+        // Hosts default the iframe to a small fixed height; resize requests
+        // are how a widget claims more space (clamped to host maxHeight).
+        var lastReportedH = 0, lastReportedW = 0, rafQueued = false;
+        function reportSize() {
+          if (rafQueued) return;
+          rafQueued = true;
+          requestAnimationFrame(function () {
+            rafQueued = false;
+            // Measure against `max-content` so we don't read back a height
+            // the host previously set as inline `height: <px>px` on us.
+            var docEl = document.documentElement;
+            var prev = docEl.style.height;
+            docEl.style.height = "max-content";
+            var h = Math.ceil(docEl.getBoundingClientRect().height);
+            docEl.style.height = prev;
+            var w = Math.ceil(window.innerWidth || docEl.getBoundingClientRect().width);
+            if (h !== lastReportedH || w !== lastReportedW) {
+              lastReportedH = h;
+              lastReportedW = w;
+              notify("ui/notifications/size-changed", { width: w, height: h });
+            }
+          });
+        }
+
+        // Recursive walk so we don't couple to one host's envelope shape —
+        // the tool result is at `params.content[]` per the spec but the walk
+        // costs ~nothing and tolerates wrapping.
+        function findImage(value) {
+          if (!value || typeof value !== "object") return null;
+          if (Array.isArray(value)) {
+            for (var i = 0; i < value.length; i++) {
+              var f = findImage(value[i]);
+              if (f) return f;
+            }
+            return null;
+          }
+          if (
+            value.type === "image" &&
+            typeof value.data === "string" &&
+            typeof value.mimeType === "string" &&
+            value.mimeType.indexOf("image/") === 0
+          ) {
+            return { data: value.data, mimeType: value.mimeType };
+          }
+          for (var k in value) {
+            if (Object.prototype.hasOwnProperty.call(value, k)) {
+              var f2 = findImage(value[k]);
+              if (f2) return f2;
+            }
+          }
+          return null;
+        }
+
+        function handleToolResult(params) {
+          var found = findImage(params);
+          if (found) renderImage(found.data, found.mimeType);
+          else setStatus("Tool result had no image content block.", true);
+        }
+
+        window.addEventListener("message", function (event) {
+          // Sandbox proxy is always window.parent — reject any other source.
+          if (event.source !== window.parent) return;
+          var msg = event.data;
+          if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return;
+
+          if (msg.id !== undefined && msg.method === undefined) {
+            // Response to one of our requests.
+            var p = pending[msg.id];
+            if (!p) return;
+            delete pending[msg.id];
+            if (msg.error) p.reject(new Error(msg.error.message || "Host error"));
+            else p.resolve(msg.result);
+            return;
+          }
+
+          if (msg.id !== undefined && typeof msg.method === "string") {
+            // Host request. We only need to honour `ping`; reply
+            // method-not-found for anything else so the host gets a clean
+            // error instead of timing out.
+            if (msg.method === "ping") {
+              send({ jsonrpc: "2.0", id: msg.id, result: {} });
+            } else {
+              send({
+                jsonrpc: "2.0",
+                id: msg.id,
+                error: { code: -32601, message: "Method not found: " + msg.method },
+              });
+            }
+            return;
+          }
+
+          // Host notification. Other ui/notifications/* (host-context-changed,
+          // size-changed, …) are deliberately ignored.
+          if (msg.method === "ui/notifications/tool-result") {
+            handleToolResult(msg.params);
+          }
+        });
+
+        if (typeof ResizeObserver === "function") {
+          var ro = new ResizeObserver(reportSize);
+          ro.observe(document.documentElement);
+          ro.observe(document.body);
+        }
+
+        request("ui/initialize", {
+          appInfo: { name: "makecode-blocks-viewer", version: "1.0.0" },
+          appCapabilities: {},
+          protocolVersion: PROTOCOL_VERSION,
+        })
+          .then(function () {
+            notify("ui/notifications/initialized", {});
+            setStatus("Waiting for tool result…");
+            reportSize();
+          })
+          .catch(function (err) {
+            setStatus("Handshake failed: " + String(err && err.message || err), true);
+          });
+      })();
+    </script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import {
   browserToolNames,
   serverTools,
   serverToolNames,
+  HEX_TOOL_NAMES,
 } from "../../src/shared/tools.ts";
 
 describe("browserTools", () => {
@@ -184,6 +185,46 @@ describe("serverTools", () => {
     it("session_set_code suggests a natural follow-up tool", () => {
       const t = serverTools.find((x) => x.function.name === "session_set_code")!;
       expect(t.function.description).toMatch(/session_get_blocks_img|session_get_hex_file/);
+    });
+  });
+
+  // The .hex file is a multi-second compile that returns an opaque base64
+  // blob the LLM cannot read. We don't want the model fetching it casually
+  // (e.g. to "verify" code compiles) — only when the user genuinely wants
+  // to flash/download to a micro:bit. This is enforced at the tool-
+  // description layer so it reaches BOTH the in-app WebLLM model and any
+  // MCP-host model (Claude Desktop, etc.) consistently.
+  describe("hex-file tool descriptions gate on user intent", () => {
+    it("session_set_code does not advertise session_get_hex_file as a typical follow-up", () => {
+      // session_get_blocks_img is fine as a follow-up — visualising the
+      // program is what users want. Hex is the costly path that the LLM
+      // should only take when the user has explicitly asked to flash.
+      const browserSetCode = browserTools.find((t) => t.function.name === "session_set_code")!;
+      const serverSetCode = serverTools.find((t) => t.function.name === "session_set_code")!;
+      expect(browserSetCode.function.description).not.toMatch(/session_get_hex_file/);
+      expect(serverSetCode.function.description).not.toMatch(/session_get_hex_file/);
+    });
+
+    it("every hex-file tool description gates on user flash/download/deploy intent and warns about cost", () => {
+      const hexTools = [
+        ...browserTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name)),
+        ...serverTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name)),
+      ];
+      // Sanity: we expect ≥3 hex tools across both targets (1 browser, 2 server).
+      expect(hexTools.length).toBeGreaterThanOrEqual(3);
+      for (const tool of hexTools) {
+        const desc = tool.function.description.toLowerCase();
+        // User-intent gate: the description must mention at least one of the
+        // verbs the user would actually use when asking for the binary.
+        expect(desc, `${tool.function.name} missing user-intent gate`).toMatch(
+          /flash|download|deploy/,
+        );
+        // Cost / opacity warning: the description must tell the model this
+        // is not a free or readable operation.
+        expect(desc, `${tool.function.name} missing cost/opacity warning`).toMatch(
+          /opaque|cannot read|expensive|costly|seconds|multi[- ]?second/,
+        );
+      }
     });
   });
 });

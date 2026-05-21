@@ -59,6 +59,12 @@ const loadedBrowserHint = `The editor must already have code loaded (via ${TOOL.
 
 const loadedServerHint = `The editor must already have code loaded (via ${TOOL.SESSION_SET_CODE}) in this session.`;
 
+// Cost gate for hex-file tools. The compile takes several seconds and the
+// returned base64 blob is opaque to the model — calling "just to verify" is
+// wasted latency and tokens. Only fetch when the user is actually asking to
+// put the program on a micro:bit.
+const hexCostHint = `Only call when the user has explicitly asked to flash, download, or deploy the program to a micro:bit. Compiling the .hex takes several seconds and the result is an opaque base64 blob you cannot read — do NOT call to verify, check, or sanity-test the code.`;
+
 // ─── Browser target ─────────────────────────────────────────────────────────
 // One executor per iframe; the iframe *is* the session. No start/end
 // lifecycle, no session_id on any tool — stateful tools act on the iframe directly.
@@ -92,7 +98,7 @@ export const browserTools: ToolDescriptor[] = [
     type: "function",
     function: {
       name: TOOL.SESSION_SET_CODE,
-      description: `Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks, or ${TOOL.SESSION_GET_HEX_FILE} to produce a downloadable firmware image.`,
+      description: `Replace the TypeScript source in the MakeCode editor with the given code. Typical follow-up: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks.`,
       parameters: {
         type: "object",
         properties: { ...CODE_PROP },
@@ -118,7 +124,7 @@ export const browserTools: ToolDescriptor[] = [
     type: "function",
     function: {
       name: TOOL.SESSION_GET_HEX_FILE,
-      description: `Compile the code currently loaded in the editor and return the micro:bit .hex as a base64 string. ${loadedBrowserHint}`,
+      description: `Compile the code currently loaded in the editor and return the micro:bit .hex as a base64 string. ${hexCostHint} ${loadedBrowserHint}`,
       parameters: {
         type: "object",
         properties: {},
@@ -185,7 +191,7 @@ export const serverToolMeta = {
     inputShape: { session_id: sessionIdField },
   },
   [TOOL.SESSION_SET_CODE]: {
-    description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-ups in the same response: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks, or ${TOOL.SESSION_GET_HEX_FILE} to produce a downloadable firmware image. ${noSessionHint}`,
+    description: `Replace the TypeScript source in the editor for this session with the given code. Typical follow-up in the same response: ${TOOL.SESSION_GET_BLOCKS_IMG} to show the user their program as blocks. ${noSessionHint}`,
     inputShape: { session_id: sessionIdField, code: codeField },
   },
   [TOOL.SESSION_GET_BLOCKS_IMG]: {
@@ -193,7 +199,7 @@ export const serverToolMeta = {
     inputShape: { session_id: sessionIdField },
   },
   [TOOL.SESSION_GET_HEX_FILE]: {
-    description: `Compile the currently-loaded code and return the micro:bit .hex as a base64 string. ${loadedServerHint} ${noSessionHint}`,
+    description: `Compile the currently-loaded code and return the micro:bit .hex as a base64 string. ${hexCostHint} ${loadedServerHint} ${noSessionHint}`,
     inputShape: { session_id: sessionIdField },
   },
   [TOOL.GET_BLOCKS_IMG_FROM_CODE]: {
@@ -202,7 +208,7 @@ export const serverToolMeta = {
     inputShape: { code: codeField },
   },
   [TOOL.GET_HEX_FILE_FROM_CODE]: {
-    description: `Compile the given TypeScript and return the micro:bit .hex as a base64 string. Stateless — does not touch any session. Server target only; on the browser target use ${TOOL.SESSION_SET_CODE} + ${TOOL.SESSION_GET_HEX_FILE} within a session.`,
+    description: `Compile the given TypeScript and return the micro:bit .hex as a base64 string. ${hexCostHint} Stateless — does not touch any session. Server target only; on the browser target use ${TOOL.SESSION_SET_CODE} + ${TOOL.SESSION_GET_HEX_FILE} within a session.`,
     inputShape: { code: codeField },
   },
 } as const satisfies Record<string, ServerToolMeta>;

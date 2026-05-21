@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-// Prebuild the browser-side shell artifacts that shell-server.ts serves:
-//   src/shell/shim.ts   → dist/shell/shim.js  (esbuild bundle, ESM, browser)
-//   src/shell/shell.html → dist/shell/shell.html  (copy)
+// Prebuild the browser-side shell artifacts:
+//   src/shell/shim.ts            → dist/shell/shim.js          (esbuild bundle, ESM, browser)
+//   src/shell/shell.html         → dist/shell/shell.html       (copy; served by shell-server.ts)
+//   src/shell/blocks-viewer.html → dist/shell/blocks-viewer.html (copy; served via MCP
+//                                                                 resources/read as a ui:// MCP App
+//                                                                 widget so Claude Desktop renders
+//                                                                 blocks images inline)
 //
 // Replaces the previous runtime-esbuild-on-first-request path. The .mcpb
 // bundle now ships dist/shell/ instead of the whole src/ tree.
@@ -31,3 +35,6 @@ await build({
 
 copyFileSync(join(srcShell, "shell.html"), join(distShell, "shell.html"));
 console.log(`  copied shell.html → ${join(distShell, "shell.html")}`);
+
+copyFileSync(join(srcShell, "blocks-viewer.html"), join(distShell, "blocks-viewer.html"));
+console.log(`  copied blocks-viewer.html → ${join(distShell, "blocks-viewer.html")}`);
