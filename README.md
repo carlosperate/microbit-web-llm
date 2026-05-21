@@ -61,7 +61,7 @@ Package manager is **npm workspaces**; do not use pnpm or yarn. TypeScript proje
 └────────────────────────────────────────────────────────────┘
 ```
 
-The tool schemas in [`packages/makecode-mcp/src/shared/tools.ts`](packages/makecode-mcp/src/shared/tools.ts) are the single source of truth. Both targets expose the same core operations; only the server exposes session lifecycle tools and `get_hex_file_from_code`.
+The tool schemas in [`packages/makecode-mcp/src/shared/tools.ts`](packages/makecode-mcp/src/shared/tools.ts) are the single source of truth. The two targets share the editor-state tools (`session_get_code`, `session_set_code`, `session_get_blocks_img`) and the stateless `get_blocks_img_from_code`. The server adds session lifecycle (`session_start`/`session_end`) and the hex-compile tools (`session_get_hex_file`, `get_hex_file_from_code`). The browser target omits hex on purpose: the MakeCode iframe sits next to the chat, so the user downloads (and WebUSB-flashes) directly from MakeCode itself.
 
 ## Using the MCP server with external clients
 

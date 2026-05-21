@@ -39,11 +39,11 @@ Both targets expose the same core operations. Descriptions live in [src/shared/t
 | `session_get_code` | ✓ | ✓ | TypeScript source |
 | `session_set_code` | ✓ | ✓ | void |
 | `session_get_blocks_img` | ✓ | ✓ | `{ pngBase64 }` (server emits MCP `image` content) |
-| `session_get_hex_file` | ✓ | ✓ | base64 Universal Hex |
+| `session_get_hex_file` | — | ✓ | base64 Universal Hex |
 | `get_blocks_img_from_code` | ✓ | ✓ | `{ pngBase64 }` (stateless; server emits MCP `image` content) |
 | `get_hex_file_from_code` | — | ✓ | base64 Universal Hex (stateless) |
 
-`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `session_get_blocks_img` requires prior `session_set_code`; if the editor is empty, the executor throws a descriptive error so the LLM can self-correct. The browser target omits `get_hex_file_from_code` on purpose. The equivalent path is `session_set_code` + `session_get_hex_file`, which the system prompt directs the model toward.
+`_from_code` tools are pure functions: same input always produces the same output, with no effect on editor state. `session_get_blocks_img` requires prior `session_set_code`; if the editor is empty, the executor throws a descriptive error so the LLM can self-correct. The browser target omits both hex tools on purpose: the user already has MakeCode's own Download button (and WebUSB flash) right next to the chat, so a `session_get_hex_file` tool would just be a slower, opaquer way to do something the UI already supports. On the server target hex stays useful because the LLM host (Claude Desktop, etc.) has no other path to the binary.
 
 ## Browser target
 

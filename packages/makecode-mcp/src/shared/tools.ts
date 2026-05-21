@@ -73,7 +73,6 @@ export const BROWSER_TOOL_NAMES = [
   TOOL.SESSION_GET_CODE,
   TOOL.SESSION_SET_CODE,
   TOOL.SESSION_GET_BLOCKS_IMG,
-  TOOL.SESSION_GET_HEX_FILE,
   TOOL.GET_BLOCKS_IMG_FROM_CODE,
 ] as const;
 
@@ -112,19 +111,6 @@ export const browserTools: ToolDescriptor[] = [
     function: {
       name: TOOL.SESSION_GET_BLOCKS_IMG,
       description: `Render the code currently loaded in the editor as a PNG image of the equivalent MakeCode blocks. Call this after producing or modifying a program so the user sees the block view inline. ${loadedBrowserHint}`,
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: TOOL.SESSION_GET_HEX_FILE,
-      description: `Compile the code currently loaded in the editor and return the micro:bit .hex as a base64 string. ${hexCostHint} ${loadedBrowserHint}`,
       parameters: {
         type: "object",
         properties: {},

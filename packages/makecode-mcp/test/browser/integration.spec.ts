@@ -60,26 +60,4 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
   });
 
-  test("session_get_hex_file triggers a download with a valid hex file", async ({ page }) => {
-    await clickButton(page, "session_set_code");
-    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
-
-    const downloadPromise = page.waitForEvent("download", { timeout: 60_000 });
-    await clickButton(page, "session_get_hex_file (download)");
-    const download = await downloadPromise;
-
-    expect(download.suggestedFilename()).toBe("microbit.hex");
-
-    const stream = await download.createReadStream();
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-    const content = Buffer.concat(chunks).toString("utf8");
-
-    // Intel Hex: every non-empty line starts with ':'
-    const lines = content.split(/\r?\n/).filter((l) => l.length > 0);
-    expect(lines.length).toBeGreaterThan(10);
-    for (const line of lines.slice(0, 20)) {
-      expect(line).toMatch(/^:/);
-    }
-  });
 });

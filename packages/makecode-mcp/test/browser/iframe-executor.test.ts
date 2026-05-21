@@ -88,25 +88,6 @@ describe("IframeExecutor — stateful tools", () => {
     expect(driver.renderBlocksImage).toHaveBeenCalledWith("basic.forever(() => {})");
   });
 
-  it("getHexFile compiles and base64-encodes the hex text", async () => {
-    const out = await exec.getHexFile();
-    expect(driver.compile).toHaveBeenCalledOnce();
-    const decoded = Buffer.from(out, "base64").toString("utf8");
-    expect(decoded).toBe(":020000040000FA\n:00000001FF\n");
-  });
-
-  it("getHexFile encodes a 2 MB hex string in well under a second", async () => {
-    // Regression guard for the O(n²) per-byte `binary += String.fromCharCode(b)`
-    // loop — that version took tens of seconds on the real ~1.7 MB hex output.
-    const big = ":" + "A".repeat(2 * 1024 * 1024 - 1);
-    driver.compile.mockResolvedValueOnce({ name: "microbit-big", hex: big });
-    const start = Date.now();
-    const out = await exec.getHexFile();
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(500);
-    expect(Buffer.from(out, "base64").toString("utf8")).toBe(big);
-  });
-
   it("state persists across calls on the same executor", async () => {
     // Demonstrates the "iframe-is-the-session" contract: no ceremony to keep
     // state between calls — consecutive calls share the same iframe.

@@ -60,7 +60,7 @@ function EmptyState() {
   return (
     <div className="thread-empty">
       <h2>micro:bit coding assistant</h2>
-      <p>Ask me to write or explain a micro:bit program. I can load code into the editor on the right, render it as blocks, or compile a .hex file.</p>
+      <p>Ask me to write or explain a micro:bit program. I can load code into the editor on the right and render it as blocks. To put the program on a micro:bit, use MakeCode's own Download button.</p>
     </div>
   );
 }

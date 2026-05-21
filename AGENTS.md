@@ -42,14 +42,19 @@ TypeScript project references are used across packages. Run `npm run build` befo
 
 The library has two executor interfaces in `src/shared/types.ts`, chosen to match how each target is actually used:
 
-- **`BrowserExecutor`** (5 methods, no `session_id` anywhere) — one iframe per executor instance. The iframe itself is the session: its editor state persists for the lifetime of the instance. App developers create one `IframeExecutor` per MakeCode panel and hand it to the chat runtime. Tool calls are stateless from the LLM's perspective — no `session_start` / `session_end` ceremony.
+- **`BrowserExecutor`** (4 methods, no `session_id` anywhere) — one iframe per executor instance. The iframe itself is the session: its editor state persists for the lifetime of the instance. App developers create one `IframeExecutor` per MakeCode panel and hand it to the chat runtime. Tool calls are stateless from the LLM's perspective — no `session_start` / `session_end` ceremony.
 - **`ServerExecutor`** (8 methods, stateful methods take `session_id`) — one MCP process can serve many LLM clients at once, each holding an opaque `session_id` that maps to a dedicated Puppeteer tab. `session_start` opens a tab; `session_end` closes it.
 
-If a new tool makes sense on both targets, implement it on both interfaces. The shared tool schemas in `src/shared/tools.ts` are split into `browserTools` (5) and `serverTools` (8) — they are deliberately not symmetric, so keep descriptions consistent across both where the behaviour is the same and let them diverge where the targets actually differ.
+If a new tool makes sense on both targets, implement it on both interfaces. The shared tool schemas in `src/shared/tools.ts` are split into `browserTools` (4) and `serverTools` (8) — they are deliberately not symmetric, so keep descriptions consistent across both where the behaviour is the same and let them diverge where the targets actually differ.
 
 ### Tool availability
 
-Both targets expose the same core operations, but `get_hex_file_from_code` is server-only. The `makecode-embed` library exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract. The browser target therefore omits `get_hex_file_from_code` entirely from `browserTools` and from `BrowserExecutor` rather than advertising a tool that always throws — the system prompt directs the model toward `session_set_code` + `session_get_hex_file` instead. On the server target, `session_start` / `session_end` gate the stateful tools; `_from_code` variants are session-less on both targets.
+The browser target exposes editor-state tools (`session_get_code`, `session_set_code`, `session_get_blocks_img`) and the stateless `get_blocks_img_from_code`. **Both hex-file tools are server-only:**
+
+- `get_hex_file_from_code` is omitted because `makecode-embed` exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract.
+- `session_get_hex_file` is omitted because the MakeCode iframe sits next to the chat in the app, so the user already has MakeCode's own Download button (and WebUSB flash) for the .hex. A tool that produces an opaque 1.7 MB base64 blob the LLM cannot read, when a one-click download already exists in the UI immediately to the right, would be strictly worse — slower, more confusing to the student, and prone to the model calling it speculatively.
+
+`BrowserExecutor` does not expose `getHexFile` at all (vs. advertising a tool that always throws). On the server target, where the LLM host has no other path to the binary, both hex tools remain useful and stay gated by `session_start` / `session_end`; `_from_code` variants are session-less on both targets.
 
 ### The `_from_code` variants are pure functions
 
@@ -277,7 +282,7 @@ Do not truncate or drop tool-call messages from the history mid-loop. The full t
 
 The loop also handles Qwen-specific quirks:
 - **Empty `tool_calls` as done-signal** — when `finish_reason === "tool_calls"` but no calls were produced (the schema-constrained model emitted `[]`), the loop makes one follow-up call with `tools: []` to let the model stream a plain-text reply, then returns. This never recurses.
-- **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`session_set_code`, `session_get_code`, `session_get_blocks_img`, `session_get_hex_file`, or the `_from_code` variants). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
+- **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`session_set_code`, `session_get_code`, `session_get_blocks_img`, or `get_blocks_img_from_code`). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
 - **Repeat-call recovery** — the smaller models sometimes ignore the system-prompt rule "never call the same tool twice" and lock into a single-tool loop (e.g. `session_get_code` every step). `runToolLoop` tracks every dispatched `(name + arguments)` in a `seenCalls` set; when a batch arrives where *every* call is a repeat, it skips dispatch and yields the plain-text follow-up instead of hammering the same tool until `maxSteps` trips. A mixed batch (some new, some repeats) still dispatches — interleaved reads are legitimate.
 
 The plain-text follow-up itself is shared across all three exits (done-signal, repeat-call, stall fallback) via a local `plainTextFollowUp(label)` generator that streams from a tools-disabled completion.
@@ -290,7 +295,7 @@ WebLLM's chat templates (e.g. Qwen2.5-Coder) reject `role: "tool"` and assistant
 
 After collapsing, if the last message is `assistant`, a fixed `TOOL_CONTINUATION_PROMPT` is appended as a `user` message to satisfy WebLLM's last-message rule. The text nudges the model to stop calling tools and produce a plain-text explanation; it deliberately does **not** mention `[]` because spelling out `[]` in the prompt biased the model toward emitting empty arrays even when it should have called tools.
 
-Image (`session_get_blocks_img*`, ~21KB base64) and hex (`session_get_hex_file*`, ~1.7MB base64) tool results are stubbed to a short summary in the flattened history. The model cannot use the bytes anyway, and feeding the hex back through WebLLM's tokenizer overflowed the JS stack with "Maximum call stack size exceeded".
+Image (`session_get_blocks_img*`, ~21KB base64) tool results are stubbed to a short summary in the flattened history — the model cannot use the bytes anyway. The flatten also stubs hex tool results defensively (`HEX_TOOL_NAMES`), even though the browser target no longer exposes any hex tool, because feeding a ~1.7 MB base64 hex back through WebLLM's tokenizer used to overflow the JS stack with "Maximum call stack size exceeded".
 
 The same flatten runs on the tools-disabled follow-up path — WebLLM's role rules apply regardless of whether `tools` was passed in.
 
@@ -302,12 +307,13 @@ Tool calls within a single batch are dispatched **sequentially** in the order th
 
 The system prompt must tell the LLM:
 - It is a micro:bit coding assistant
-- The MakeCode editor on the right is stateful across the conversation — code loaded via `session_set_code` persists for later calls like `session_get_blocks_img` and `session_get_hex_file`
+- The MakeCode editor on the right is stateful across the conversation — code loaded via `session_set_code` persists for later calls like `session_get_blocks_img`
 - `session_set_code` followed by `session_get_blocks_img` is a valid multi-turn pattern (the PNG renders inline in the chat)
 - `get_blocks_img_from_code` is self-contained — use it to preview a snippet without touching the editor
+- The app has no hex-file tool. If the student asks to flash, download, or get the .hex, direct them to MakeCode's own Download button in the panel on the right (which also supports WebUSB flashing).
 - Code should be valid MakeCode TypeScript (not standard Node.js TypeScript)
 
-The browser prompt must not mention `session_start` / `session_end` / `session_id` — those belong to the server target and are irrelevant here.
+The browser prompt must not mention `session_start` / `session_end` / `session_id` — those belong to the server target and are irrelevant here. It also must not advertise `session_get_hex_file` or `get_hex_file_from_code` — neither is available on the browser target.
 
 ### Comparison mode
 

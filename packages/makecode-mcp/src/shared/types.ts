@@ -27,7 +27,6 @@ export interface BrowserExecutor {
   getCurrentCode(): Promise<string>;
   setCode(code: string): Promise<void>;
   getBlocksImage(): Promise<BlocksImage>;
-  getHexFile(): Promise<string>;
   getBlocksImageFromCode(code: string): Promise<BlocksImage>;
 }
 

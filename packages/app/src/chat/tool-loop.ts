@@ -1,5 +1,5 @@
 import type { BrowserExecutor, BrowserToolName, ToolDescriptor } from "makecode-mcp/browser";
-import { TOOL, createLogger, encodeBlocksImage, encodeHex, preview } from "makecode-mcp/browser";
+import { TOOL, createLogger, encodeBlocksImage, preview } from "makecode-mcp/browser";
 
 const log = createLogger("tool-loop");
 
@@ -91,7 +91,6 @@ const SUBSTANTIVE_TOOLS: ReadonlySet<string> = new Set<BrowserToolName>([
   TOOL.SESSION_SET_CODE,
   TOOL.SESSION_GET_CODE,
   TOOL.SESSION_GET_BLOCKS_IMG,
-  TOOL.SESSION_GET_HEX_FILE,
   TOOL.GET_BLOCKS_IMG_FROM_CODE,
 ]);
 
@@ -112,8 +111,6 @@ async function dispatchTool(
       return JSON.stringify({ ok: true });
     case TOOL.SESSION_GET_BLOCKS_IMG:
       return encodeBlocksImage((await executor.getBlocksImage()).pngBase64);
-    case TOOL.SESSION_GET_HEX_FILE:
-      return encodeHex(await executor.getHexFile());
     case TOOL.GET_BLOCKS_IMG_FROM_CODE:
       return encodeBlocksImage(
         (await executor.getBlocksImageFromCode(args.code as string)).pngBase64,

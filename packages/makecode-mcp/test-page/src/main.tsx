@@ -128,23 +128,6 @@ function App() {
     }
   };
 
-  const handleGetHex = async () => {
-    try {
-      const b64 = await exec().getHexFile();
-      const hex = atob(b64);
-      const blob = new Blob([hex], { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "microbit.hex";
-      a.click();
-      URL.revokeObjectURL(url);
-      append(`session_get_hex_file → ${hex.length} bytes (downloading)`);
-    } catch (e) {
-      append(`ERROR: ${e}`);
-    }
-  };
-
   const btn = (enabled: boolean): React.CSSProperties => ({
     padding: "6px 12px",
     cursor: enabled ? "pointer" : "not-allowed",
@@ -205,9 +188,6 @@ function App() {
           </button>
           <button style={btn(ready)} disabled={!ready} onClick={handleGetImageFromCode}>
             get_blocks_img_from_code
-          </button>
-          <button style={btn(ready)} disabled={!ready} onClick={handleGetHex}>
-            session_get_hex_file (download)
           </button>
 
           <hr />

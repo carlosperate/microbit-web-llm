@@ -10,17 +10,6 @@ import type { MakeCodeDriver } from "./driver-port.js";
 
 const log = createLogger("executor");
 
-// Chunked to stay O(n): per-byte string concat is O(n²) on a 1.7 MB hex.
-function utf8ToBase64(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  const CHUNK = 0x8000;
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-
 // One executor per iframe. The iframe *is* the session — callers don't open
 // or close anything; the state lives in the iframe for as long as the
 // executor instance is alive.
@@ -67,21 +56,6 @@ export class IframeExecutor implements BrowserExecutor {
       } else {
         log.error("getBlocksImage → error", err);
       }
-      throw err;
-    } finally {
-      end();
-    }
-  }
-
-  async getHexFile(): Promise<string> {
-    const end = log.time("getHexFile");
-    try {
-      const { hex } = await this.driver.compile();
-      const base64 = utf8ToBase64(hex);
-      log.info("getHexFile → ok", { hexBytes: hex.length, base64Bytes: base64.length });
-      return base64;
-    } catch (err) {
-      log.error("getHexFile → error", err);
       throw err;
     } finally {
       end();

@@ -105,30 +105,6 @@ describe("flattenToolHistory", () => {
     expect(collapsed.content).toContain(String(result.length));
   });
 
-  it("stubs hex tool results instead of dumping bytes", () => {
-    const fakeHex = "B".repeat(50_000);
-    const result = encodeHex(fakeHex);
-    const history: OpenAIMessage[] = [
-      { role: "user", content: "compile" },
-      {
-        role: "assistant",
-        content: "",
-        tool_calls: [
-          {
-            id: "c2",
-            type: "function",
-            function: { name: TOOL.SESSION_GET_HEX_FILE, arguments: "{}" },
-          },
-        ],
-      },
-      { role: "tool", tool_call_id: "c2", content: result },
-    ];
-    const out = flattenToolHistory(history);
-    const collapsed = out[1] as { role: "assistant"; content: string };
-    expect(collapsed.content).not.toContain(fakeHex);
-    expect(collapsed.content).toContain("hex compiled");
-    expect(collapsed.content).toContain("not shown");
-  });
 });
 
 describe("toWebLLMMessages", () => {
@@ -156,7 +132,7 @@ describe("TOOL_CONTINUATION_PROMPT", () => {
   // this snapshot deliberately if you change the prompt.
   it("matches the documented contract", () => {
     expect(TOOL_CONTINUATION_PROMPT).toMatchInlineSnapshot(
-      `"(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, do not call session_get_hex_file unless the student asked for it, and do not call any image tool just to look at code.)"`,
+      `"(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, and do not call any image tool just to look at code.)"`,
     );
   });
 

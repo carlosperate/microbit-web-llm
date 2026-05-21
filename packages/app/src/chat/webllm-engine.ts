@@ -7,7 +7,6 @@ import type { ChatCompletionFn, OpenAIMessage, StreamChunk } from "./tool-loop.j
 import {
   HEX_TOOL_NAMES,
   IMAGE_TOOL_NAMES,
-  TOOL,
   createLogger,
   preview,
   stubHexResult,
@@ -104,7 +103,7 @@ export function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
   return out;
 }
 
-export const TOOL_CONTINUATION_PROMPT = `(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, do not call ${TOOL.SESSION_GET_HEX_FILE} unless the student asked for it, and do not call any image tool just to look at code.)`;
+export const TOOL_CONTINUATION_PROMPT = `(Tool results above. The original task is most likely complete now — stop calling tools so you can give the student a short plain-text explanation on the next turn. Only emit another tool call if the original task genuinely is not finished and the next call will clearly advance it. Do not repeat a tool you already called, and do not call any image tool just to look at code.)`;
 
 // Tool results that are large opaque blobs the model cannot use — feeding them
 // back through tokenization wastes context and, for hex (~1.7MB base64), blows

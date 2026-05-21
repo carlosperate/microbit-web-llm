@@ -12,8 +12,8 @@ describe("browserTools", () => {
   // tool list does not include session_start / session_end and no tool
   // carries a session_id parameter.
 
-  it("exports exactly 5 tools", () => {
-    expect(browserTools).toHaveLength(5);
+  it("exports exactly 4 tools", () => {
+    expect(browserTools).toHaveLength(4);
   });
 
   it("every tool is an OpenAI function-calling descriptor", () => {
@@ -34,10 +34,17 @@ describe("browserTools", () => {
         "session_get_code",
         "session_set_code",
         "session_get_blocks_img",
-        "session_get_hex_file",
         "get_blocks_img_from_code",
       ].sort(),
     );
+  });
+
+  // session_get_hex_file is server-only: in the app the user can download
+  // the .hex directly via MakeCode's own Download button (and flash via
+  // WebUSB from MakeCode), so the tool would be redundant.
+  it("does NOT include session_get_hex_file", () => {
+    const names = browserTools.map((t) => t.function.name);
+    expect(names).not.toContain("session_get_hex_file");
   });
 
   it("browserToolNames matches the browserTools array", () => {
@@ -59,7 +66,7 @@ describe("browserTools", () => {
     }
   });
 
-  it.each(["session_get_code", "session_get_blocks_img", "session_get_hex_file"])(
+  it.each(["session_get_code", "session_get_blocks_img"])(
     "stateful tool %s takes no arguments",
     (name) => {
       const t = browserTools.find((x) => x.function.name === name)!;
@@ -86,7 +93,7 @@ describe("browserTools", () => {
 
   it("session_set_code description hints at natural follow-ups", () => {
     const t = browserTools.find((x) => x.function.name === "session_set_code")!;
-    expect(t.function.description).toMatch(/session_get_blocks_img|session_get_hex_file/);
+    expect(t.function.description).toMatch(/session_get_blocks_img/);
   });
 
   it("does NOT include get_hex_file_from_code (server-only tool)", () => {
@@ -205,13 +212,15 @@ describe("serverTools", () => {
       expect(serverSetCode.function.description).not.toMatch(/session_get_hex_file/);
     });
 
+    it("the browser target exposes NO hex-file tools (user downloads via MakeCode directly)", () => {
+      const browserHexTools = browserTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name));
+      expect(browserHexTools).toEqual([]);
+    });
+
     it("every hex-file tool description gates on user flash/download/deploy intent and warns about cost", () => {
-      const hexTools = [
-        ...browserTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name)),
-        ...serverTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name)),
-      ];
-      // Sanity: we expect ≥3 hex tools across both targets (1 browser, 2 server).
-      expect(hexTools.length).toBeGreaterThanOrEqual(3);
+      const hexTools = serverTools.filter((t) => HEX_TOOL_NAMES.has(t.function.name));
+      // Sanity: both server hex tools (session + stateless) should be present.
+      expect(hexTools.length).toBeGreaterThanOrEqual(2);
       for (const tool of hexTools) {
         const desc = tool.function.description.toLowerCase();
         // User-intent gate: the description must mention at least one of the
