@@ -60,4 +60,43 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
   });
 
+  test("session_get_blocks_img returns actionable empty-editor error after loading empty code", async ({ page }) => {
+    await page.locator("textarea").fill("");
+    await clickButton(page, "session_set_code");
+    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
+
+    await clickButton(page, "session_get_blocks_img (editor)");
+    await expect(
+      page.getByText(
+        /No code loaded in the editor\. Call session_set_code first to load code before requesting session_get_blocks_img\./,
+      ),
+    ).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("get_blocks_img_from_code does not mutate editor state", async ({ page }) => {
+    const editorCode = 'basic.showString("STATE_A")';
+    const renderOnlyCode = 'basic.showString("STATE_B")';
+
+    await page.locator("textarea").fill(editorCode);
+    await clickButton(page, "session_set_code");
+    await expect(page.getByText("session_set_code → ok")).toBeVisible({ timeout: 15_000 });
+
+    await page.locator("textarea").fill(renderOnlyCode);
+    await clickButton(page, "get_blocks_img_from_code");
+    await expect(page.getByAltText("blocks PNG")).toBeVisible({ timeout: 30_000 });
+    await page.keyboard.press("Escape");
+    await expect(page.getByAltText("blocks PNG")).not.toBeVisible();
+
+    await clickButton(page, "session_get_code");
+    await expect(page.getByText(/session_get_code →.*STATE_A/)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("session_set_code surfaces decompile failure guidance for invalid TypeScript", async ({ page }) => {
+    await page.locator("textarea").fill('basic.showString("oops"');
+    await clickButton(page, "session_set_code");
+
+    await expect(page.getByText(/failed to compile to blocks/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Fix the TypeScript and call session_set_code again/i)).toBeVisible({ timeout: 10_000 });
+  });
+
 });

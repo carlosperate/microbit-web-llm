@@ -14,7 +14,7 @@ export default defineConfig({
   workers: 1,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: "http://127.0.0.1:4174",
     headless: true,
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -26,9 +26,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npx vite --config ${resolve(__dirname, "test-page/vite.config.ts")}`,
-    url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
+    command: `npx vite --host 127.0.0.1 --port 4174 --strictPort --config ${resolve(__dirname, "test-page/vite.config.ts")}`,
+    url: "http://127.0.0.1:4174",
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });

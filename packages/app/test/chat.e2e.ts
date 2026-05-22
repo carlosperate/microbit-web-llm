@@ -1,11 +1,10 @@
 import { test, expect } from "@playwright/test";
 
 // The mock script runs in the page context before the app bootstraps.
-// It intercepts all chat completions and replays a scripted transcript:
-//   1st call  → session_start tool call
-//   2nd call  → session_set_code tool call with a micro:bit program
-//   3rd call  → session_get_blocks_img tool call
-//   4th call  → final text response
+// It intercepts all chat completions and replays a browser-target transcript:
+//   1st call  → session_set_code
+//   2nd call  → session_get_blocks_img
+//   3rd call  → final plain-text response
 const INIT_SCRIPT = `
 (() => {
   const SAMPLE_CODE = 'basic.showString("HI")';
@@ -16,39 +15,17 @@ const INIT_SCRIPT = `
   });
   const chunk = (delta, finish_reason = null) => ({ choices: [{ delta, finish_reason }] });
   let turn = 0;
-  window.__mockChatCompletion = async ({ messages }) => {
+  window.__mockChatCompletion = async () => {
     turn++;
     if (turn === 1) {
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "session_start", arguments: "{}" } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "session_set_code", arguments: JSON.stringify({ code: SAMPLE_CODE }) } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
     if (turn === 2) {
-      const sid = (() => {
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === "tool") {
-            try { return JSON.parse(messages[i].content).session_id; } catch {}
-          }
-        }
-        return "unknown";
-      })();
       return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c2", type: "function", function: { name: "session_set_code", arguments: JSON.stringify({ session_id: sid, code: SAMPLE_CODE }) } }] }),
-        chunk({}, "tool_calls"),
-      ]);
-    }
-    if (turn === 3) {
-      const sid = (() => {
-        for (const m of messages) {
-          if (m.role === "tool" && m.tool_call_id === "c1") {
-            try { return JSON.parse(m.content).session_id; } catch {}
-          }
-        }
-        return "unknown";
-      })();
-      return asStream([
-        chunk({ tool_calls: [{ index: 0, id: "c3", type: "function", function: { name: "session_get_blocks_img", arguments: JSON.stringify({ session_id: sid }) } }] }),
+        chunk({ tool_calls: [{ index: 0, id: "c2", type: "function", function: { name: "session_get_blocks_img", arguments: "{}" } }] }),
         chunk({}, "tool_calls"),
       ]);
     }
@@ -60,7 +37,7 @@ const INIT_SCRIPT = `
 })();
 `;
 
-test("full chat → session_set_code → session_get_blocks_img flow using mocked WebLLM", async ({ page }) => {
+test("full chat renders inline blocks image in browser-tool happy path", async ({ page }) => {
   await page.addInitScript(INIT_SCRIPT);
   await page.goto("/");
 
@@ -74,17 +51,22 @@ test("full chat → session_set_code → session_get_blocks_img flow using mocke
   await composer.fill("Please load a program that shows HI on the micro:bit");
   await composer.press("Enter");
 
-  // Expect all four tool calls to appear in the assistant message.
-  await expect(page.locator(".tool-call summary code", { hasText: "session_start" })).toBeVisible({ timeout: 30_000 });
+  // Expect both browser-side tool calls to appear in the assistant message.
   await expect(page.locator(".tool-call summary code", { hasText: "session_set_code" })).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(".tool-call summary code", { hasText: "session_get_blocks_img" })).toBeVisible({ timeout: 30_000 });
 
+  const setCodeCall = page.locator(".tool-call", {
+    has: page.locator("summary code", { hasText: "session_set_code" }),
+  });
+  const blocksCall = page.locator(".tool-call", {
+    has: page.locator("summary code", { hasText: "session_get_blocks_img" }),
+  });
+  await expect(setCodeCall).not.toHaveClass(/tool-call-error/);
+  await expect(blocksCall).not.toHaveClass(/tool-call-error/);
+
+  // Browser adapter should append an inline image part for blocks results.
+  await expect(page.getByAltText("MakeCode blocks")).toBeVisible({ timeout: 30_000 });
+
   // Final text reply streams in.
   await expect(page.locator(".message-assistant")).toContainText(/scrolls HI/, { timeout: 30_000 });
-
-  // Expand the session_get_blocks_img call — its result should contain a PNG <img>
-  // (or an error if the renderer wasn't available, e.g. no session in browser).
-  const imgCall = page.locator(".tool-call", { has: page.locator("summary code", { hasText: "session_get_blocks_img" }) });
-  await imgCall.locator("summary").click();
-  await expect(imgCall).toContainText(/pngBase64|No code loaded|session_id|data:image\/png/i);
 });
