@@ -7,7 +7,7 @@ import { createChatAdapter } from "./chat/adapter.js";
 import type { ChatCompletionFn } from "./chat/tool-loop.js";
 import { Thread } from "./chat/Thread.js";
 import { type LoadState } from "./chat/webllm-engine.js";
-import { MODELS, DEFAULT_MODEL_ID, type ModelId } from "./config.js";
+import { MODELS, DEFAULT_MODEL_ID, SYSTEM_PROMPT, type ModelId } from "./config.js";
 import { useWebLLMSlot } from "./chat/webllm-slot.js";
 import { DEFAULT_SETTINGS, type ChatSettings, type AccentColor } from "./chat/settings.js";
 import { SettingsPanel } from "./SettingsPanel.js";
@@ -37,11 +37,19 @@ function buildCssVars(settings: ChatSettings): React.CSSProperties {
 /** Hosts its own runtime so remounting this component (via `key`) gives a
  *  fresh, empty thread — used to reset the conversation when the model
  *  changes without touching the MakeCode iframe. */
-function ChatThread({ adapter }: { adapter: ChatAdapter }) {
+function ChatThread({
+  adapter,
+  contextWindow,
+  systemPrompt,
+}: {
+  adapter: ChatAdapter;
+  contextWindow: number | null;
+  systemPrompt: string;
+}) {
   const runtime = useLocalRuntime(adapter);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <Thread />
+      <Thread contextWindow={contextWindow} systemPrompt={systemPrompt} />
     </AssistantRuntimeProvider>
   );
 }
@@ -72,6 +80,8 @@ export function App(props: {
   // Derive display state: mock path bypasses slot entirely
   const loadState: LoadState = props.mockCompletion ? { status: "ready" } : slot.loadState;
   const loadedModelId = props.mockCompletion ? DEFAULT_MODEL_ID : slot.loadedModelId;
+  // Mock path can't read prebuiltAppConfig; 4096 is the current default for every shipped model.
+  const loadedContextWindow = props.mockCompletion ? 4096 : slot.loadedContextWindow;
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -241,7 +251,12 @@ export function App(props: {
             </button>
           </header>
           <div className="chat-body">
-            <ChatThread key={chatEpoch} adapter={adapter} />
+            <ChatThread
+              key={chatEpoch}
+              adapter={adapter}
+              contextWindow={loadedContextWindow}
+              systemPrompt={settings.systemPrompt.trim() || SYSTEM_PROMPT}
+            />
             {!modelLoaded && loadState.status !== "loading" && loadState.status !== "unsupported" && loadState.status !== "error" && (
               <ModelNotLoadedOverlay />
             )}

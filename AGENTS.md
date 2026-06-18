@@ -1,378 +1,206 @@
 # AGENTS.md
 
-This file is the working spec for AI agents working on this repository. Sections roughly map to subsystems; consult the relevant one before changing code in that area, and update this file in the same commit when you change something it describes (see "Keep tests and docs in sync").
+Working spec for AI agents on this repo. Sections map to subsystems — consult the relevant one before changing that area, and **update this file in the same commit when you change something it describes.** It captures the *why* (decisions, failed attempts, gotchas) that the source can't show on its own; keep it that way — don't add things that just restate the code.
 
-**Map:**
-- *Cross-cutting rules* — TDD, doc/test sync, logging conventions, no-shared-state, executor interfaces, tool semantics.
-- *Package: `makecode-mcp`* — both build targets (browser + server), MCP shell, server layering, shared codecs.
-- *Package: `app`* — WebLLM tool loop, history flattening, system prompt, comparison mode.
-- *What Not To Do* — common traps that previously bit us.
+This is a monorepo for **MakeCode MCP**: a TypeScript library + web app connecting an in-browser LLM chat to a MakeCode micro:bit editor.
 
-## Project Summary
+- **`packages/makecode-mcp`** — core library, owns all MakeCode integration. Two build targets: `browser` (React + postMessage) and `server` (Node + Puppeteer + MCP protocol).
+- **`packages/app`** — React + Vite app. Single-chat = split-pane (WebLLM chat left, MakeCode iframe right). Comparison mode = three panels side-by-side for evaluating models.
 
-This is a monorepo for **MakeCode MCP** — a TypeScript library and companion web app that connects an in-browser LLM chat to a MakeCode micro:bit editor.
+Setup, scripts, and package overviews live in `README.md` and `packages/makecode-mcp/README.md`. Package manager is **npm workspaces** — not pnpm/yarn. Run `npm run build` before running the app if you changed `makecode-mcp` (TypeScript project references).
 
-The repo has two packages:
+`makecode-mcp/tsconfig.json` sets `tsBuildInfoFile: "./dist/.tsbuildinfo"` deliberately: the incremental-build sidecar lives inside `dist/` so `rm -rf dist` wipes it and forces a full rebuild. Default-location buildinfo would survive a `dist` wipe and make tsc skip emission.
 
-- **`packages/makecode-mcp`** — the core library. Owns all MakeCode integration. Has two build targets: `browser` (React + postMessage) and `server` (Node.js + Puppeteer + MCP protocol).
-- **`packages/app`** — a React + Vite web app. Single-chat mode is a split-pane UI (WebLLM chat left, MakeCode iframe right). Comparison mode adds a three-panel layout for evaluating models side-by-side against the same prompt.
+## Cross-cutting rules
 
-Use `README.md` for monorepo setup and package overviews, and `packages/makecode-mcp/README.md` for MCP client configuration and server usage details.
+### Tests first, docs in sync
+Every new piece of production code lands with a test authored *before* the implementation (red → green → refactor) — tests written after the fact overfit to whatever the code does. Unit tests (Vitest) live in `packages/*/test/`; e2e (Playwright, `npm run test:e2e`) live in the same tree.
 
+When a change alters observable behaviour or a documented contract, update the matching tests *and* this file in the same commit. A test that now passes for the wrong reason gets fixed, not left. Changing the system prompt → update `packages/app/test/system-prompt.test.ts`. Skip doc/test updates only for genuinely invisible changes (local rename, comment cleanup). If you find yourself silencing a log to pass a test, fix the test — the logger is already test-silent.
 
-## Monorepo Setup
+### Verbose logging is part of the contract
+This is a teaching/research POC; a live trace is how the developer and student observers debug it. Logging is on by default and must stay that way.
 
-```bash
-npm install                         # install all workspace dependencies
-npm run build --workspaces          # build all packages
-npm run test --workspaces           # run unit tests (Vitest)
-npm run test:e2e                    # run Playwright e2e tests
-npm run dev -w app                  # run the app in dev mode
-npm run dev:test-mcp -w makecode-mcp # build + launch MCP Inspector against the stdio server
-```
+- Use the shared logger (`packages/makecode-mcp/src/shared/logger.ts`), imported via `makecode-mcp/browser` or `makecode-mcp/server`. Never hand-roll `console.log` prefixes or a second logger.
+- One namespace per module: `const log = createLogger("tool-loop")`. Existing: `app`, `adapter`, `tool-loop`, `webllm` (shared by `webllm-engine.ts` + `webllm-slot.ts`), `comparison`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool`, `browser-pool`. Reuse these when extending the same area.
+- Log lifecycle events a reader needs to follow the flow: run entry/exit, each tool-loop step with `finish_reason` + pending-call count, each tool dispatch with args summary + result size, stall detection/recovery, errors.
+- `preview(value, maxChars?)` for anything large (code, PNG/hex base64, JSON). `log.time(label)` for async boundaries that might hang. `log.group`/`log.groupEnd` paired in `try/finally` to bracket a unit of work.
+- **Server code (`packages/makecode-mcp/src/server/`) must not write to stdout** — the MCP stdio transport owns it. The shared logger routes Node output to stderr.
+- Disable paths (keep these): `localStorage.setItem('mkcp:log','0')` or `?mkcp-log=0` (browser); `MKCP_LOG=0` (Node); auto-off under `VITEST` / `NODE_ENV=test`.
 
-Package manager: **npm workspaces**. Do not use pnpm or yarn.
-
-TypeScript project references are used across packages. Run `npm run build` before running the app if you've changed `makecode-mcp`. To reset, `rm -rf dist` is safe — `makecode-mcp/tsconfig.json` sets `tsBuildInfoFile: "./dist/.tsbuildinfo"` so the incremental-build sidecar lives inside `dist/` and gets wiped with it; the next build is a full rebuild. Default-location buildinfo (next to tsconfig.json) would survive a `dist` wipe and cause tsc to skip emission — colocating fixes that.
-
-
-## Key Architectural Rules
+### No shared state between chat and editor panels
+The only link between a chat surface and its `MakeCodePanel` is the `IframeExecutor` instance passed as a prop. No global store, context, or event bus. Comparison mode keeps per-panel `executorRefs[i]` in `ComparisonLayout`, exposed to each adapter via a `getExecutor()` closure (no cross-panel store). The only thing comparison panels share is the active completion via `slotCompletionRef` — a controlled read of the single `useWebLLMSlot`.
 
 ### Two executors, two interfaces — the iframe *is* the session on browser
+Interfaces in `src/shared/types.ts`, matched to how each target is used:
 
-The library has two executor interfaces in `src/shared/types.ts`, chosen to match how each target is actually used:
+- **`BrowserExecutor`** (4 methods, no `session_id`) — one iframe per instance; the iframe *is* the session (editor state persists for the instance lifetime). Tool calls are stateless from the LLM's view — no `session_start`/`session_end` ceremony.
+- **`ServerExecutor`** (8 methods, stateful ones take `session_id`) — one MCP process serves many clients, each holding an opaque `session_id` mapping to a dedicated Puppeteer tab. `session_start` opens a tab, `session_end` closes it.
 
-- **`BrowserExecutor`** (4 methods, no `session_id` anywhere) — one iframe per executor instance. The iframe itself is the session: its editor state persists for the lifetime of the instance. App developers create one `IframeExecutor` per MakeCode panel and hand it to the chat runtime. Tool calls are stateless from the LLM's perspective — no `session_start` / `session_end` ceremony.
-- **`ServerExecutor`** (8 methods, stateful methods take `session_id`) — one MCP process can serve many LLM clients at once, each holding an opaque `session_id` that maps to a dedicated Puppeteer tab. `session_start` opens a tab; `session_end` closes it.
+Schemas in `src/shared/tools.ts` split into `browserTools` (4) and `serverTools` (8) — deliberately asymmetric. Keep descriptions consistent where behaviour matches; let them diverge where targets differ. If a new tool fits both, implement it on both.
 
-If a new tool makes sense on both targets, implement it on both interfaces. The shared tool schemas in `src/shared/tools.ts` are split into `browserTools` (4) and `serverTools` (8) — they are deliberately not symmetric, so keep descriptions consistent across both where the behaviour is the same and let them diverge where the targets actually differ.
+### Tool availability — both hex tools are server-only
+Browser exposes editor-state tools (`session_get_code`, `session_set_code`, `session_get_blocks_img`) + stateless `get_blocks_img_from_code`.
 
-### Tool availability
+- `get_hex_file_from_code` is browser-omitted: `makecode-embed` has a blocks renderer but no stateless compile path; faking one needs a hidden editor or mutating the main one — both break the pure-function contract.
+- `session_get_hex_file` is browser-omitted: the MakeCode iframe sits right next to the chat, so the user already has MakeCode's Download button (+ WebUSB flash). A tool producing an opaque 1.7 MB base64 blob the LLM can't read, when a one-click download exists immediately to the right, is strictly worse and invites speculative calls.
 
-The browser target exposes editor-state tools (`session_get_code`, `session_set_code`, `session_get_blocks_img`) and the stateless `get_blocks_img_from_code`. **Both hex-file tools are server-only:**
-
-- `get_hex_file_from_code` is omitted because `makecode-embed` exposes a blocks renderer (`createMakeCodeRenderBlocks`) but no equivalent stateless compile path; implementing one in the browser would require a hidden editor iframe or mutating the main editor — both violate the pure-function contract.
-- `session_get_hex_file` is omitted because the MakeCode iframe sits next to the chat in the app, so the user already has MakeCode's own Download button (and WebUSB flash) for the .hex. A tool that produces an opaque 1.7 MB base64 blob the LLM cannot read, when a one-click download already exists in the UI immediately to the right, would be strictly worse — slower, more confusing to the student, and prone to the model calling it speculatively.
-
-`BrowserExecutor` does not expose `getHexFile` at all (vs. advertising a tool that always throws). On the server target, where the LLM host has no other path to the binary, both hex tools remain useful and stay gated by `session_start` / `session_end`; `_from_code` variants are session-less on both targets.
-
-### The `_from_code` variants are pure functions
-
-`get_blocks_img_from_code` and `get_hex_file_from_code` take TypeScript code as an argument and return an artifact. They must not read or write any persistent editor state. Treat them as stateless — same input always produces the same output.
+`BrowserExecutor` simply doesn't declare `getHexFile` (vs. a tool that always throws). On the server target both hex tools stay useful and gated by `session_start`/`session_end`. `_from_code` variants are session-less on both targets and must be **pure** — no persistent editor reads/writes, same input → same output.
 
 ### `session_get_blocks_img` requires loaded code
-
-In browser executor, `getBlocksImage()` must check that the editor is not empty before proceeding. If it is empty, throw an `Error` with a message written for the LLM to read and self-correct:
-
+In the browser executor, `getBlocksImage()` must check the editor isn't empty and otherwise throw this exact LLM-facing message (part of the interaction loop — not a generic error):
 ```
 No code loaded in the editor. Call session_set_code first to load code before requesting session_get_blocks_img.
 ```
 
-Do not throw a generic error. The message is part of the LLM interaction loop.
-
-### `session_set_code` confirms decompile and `session_get_code` always round-trips
-
-`MakeCodeFrameDriverAdapter` is intentionally cache-free: `getProject()` always issues a fresh `saveProject()` and waits for the resulting `workspacesave`, and `handleWorkspaceSave` replaces project state rather than merging. The earlier cache + partial-text merge logic was defensive against `workspacesave` events with missing `text` keys, but live postMessage traces consistently show MakeCode emitting all `text` fields on every save. Round-tripping every read costs ~one postMessage hop per call and in exchange the editor's current state always reflects what the iframe actually has — including any edits a user might have made between turns.
-
-`setProject` exists to make the *write* side reliable for the LLM tool loop:
-
-1. **Preserve project header continuity.** The adapter tracks the last header it saw via `handleWorkspaceSave` and passes it back into `importProject` so MakeCode keeps the same project identity across `session_set_code` calls instead of treating each as a fresh project.
-2. **Confirm decompile actually happened, not just that `switchBlocks` replied.** MakeCode replies `success:true` to the `switchblocks` postMessage even when it silently falls back to JS view because the TS can't be decompiled (it shows an in-iframe "Cannot convert to blocks" modal). Awaiting `switchBlocks()` alone is therefore not a reliable success signal. The adapter detects the failure by observing the workspacesave flow: a healthy decompile triggers at least one more `workspacesave` event after `switchBlocks` resolves, whereas a failed decompile emits no further postMessages at all — MakeCode logs TS error text to the iframe console only. `setProject` therefore races the next text-bearing `workspacesave` against a 5 s timer (`DECOMPILE_CONFIRM_TIMEOUT_MS`) and throws `"Code was loaded into the editor but failed to compile to blocks. Fix the TypeScript and call session_set_code again."` on timeout. Empty `main.ts` imports skip the wait (the blank-project bootstrap doesn't trigger a follow-up save). If `switchBlocks` itself rejects with a decompile-shaped message (`/cannot convert to blocks|decompile|unsupported syntax|ts\d{4}/i`), it's rewrapped with the same hint; other rejections propagate unwrapped so transport hiccups don't get blamed on the model's code. The tool loop surfaces all of these as `isError: true` so the model self-corrects rather than calling `session_get_blocks_img` on uncompilable code.
-
-### Tests are written first
-
-Every new piece of production code lands with a failing test authored *before* the implementation. Red → green → refactor. Writing tests after the fact overfits them to whatever the code happens to do, masking wrong behaviour. Unit tests (Vitest) live under `packages/*/test/`; integration/e2e tests (Playwright) live under the same `test/` tree but run only via `npm run test:e2e`.
-
-### Keep tests and docs in sync with the code
-
-When a change alters observable behaviour or a documented contract, update the relevant tests and docs in the same commit. Concretely:
-- If you change how a function/class behaves (new branch, new error path, new recovery, removed feature), update or add the corresponding unit test. If a test now passes for the wrong reason, fix the test rather than leaving it as-is.
-- If you change something this file (`AGENTS.md`) describes — tool-loop recovery branches, flattening rules, system-prompt contract, executor interfaces, layering, logging namespaces — update the matching section. `AGENTS.md` is the working spec; stale entries here mislead future agents.
-- If you change the system prompt, update `packages/app/test/system-prompt.test.ts` and any AGENTS.md guidance about what the prompt must/must not contain.
-- If you change a public README example (root `README.md`, `packages/makecode-mcp/README.md`), make sure the example still runs.
-
-Skip doc/test updates only for changes that are genuinely invisible from outside (renaming a local variable, comment cleanup, formatting). When in doubt, update.
-
-### No shared state between chat and editor panels
-
-The only connection between a chat surface and its `MakeCodePanel` is the `IframeExecutor` instance passed in as a prop. Do not introduce a global store, context, or event bus for this — keep it a direct dependency.
-
-This holds in both layouts: single-chat passes one executor to one chat; comparison mode keeps a per-panel `executorRefs[i]` in `ComparisonLayout` and exposes it to each panel's adapter via the adapter's `getExecutor()` closure (no cross-panel store). The only thing comparison panels share is the active WebLLM completion via `slotCompletionRef`, which is a controlled, ref-mediated read of the *single* `useWebLLMSlot` — see "Comparison mode" under Package: app.
-
-### Verbose logging is part of the contract
-
-This is a POC for teaching and research; a live trace of what the system is doing is how the developer (and student observers) debug it. Logging is enabled by default and must stay that way.
-
-- Use the shared logger from `packages/makecode-mcp/src/shared/logger.ts`. Import via `makecode-mcp/browser` or `makecode-mcp/server` — never hand-roll `console.log` prefixes or instantiate a second logger.
-- One namespace per module: `const log = createLogger("tool-loop")`. Pick a short, stable, hyphenated name. Existing namespaces: `app`, `adapter`, `tool-loop`, `webllm` (shared by `webllm-engine.ts` and `webllm-slot.ts` — same area), `comparison`, `panel`, `executor`, `mcp`, `tab-executor`, `puppeteer-tab-pool`, `browser-pool`. Reuse these when extending the same area.
-- Log the lifecycle events a reader needs to follow the flow: entry/exit of a run, each tool-loop step with `finish_reason` and pending-call count, every tool dispatch with args summary + result size, stall detection and recovery, errors. If you add a new tool case, log both the request and the result.
-- Use `preview(value, maxChars?)` for anything that can be large (code, PNG base64, hex, JSON blobs). Never dump raw multi-kB strings to the console.
-- Use `log.time(label)` (returns an end-fn) to instrument any async boundary a user might suspect of hanging — model load, tool dispatch, completion stream.
-- Use `log.group(...)` / `log.groupEnd()` to bracket a self-contained unit of work (a `run()` turn, a `runToolLoop` invocation). Always pair them in a `try/finally` so a thrown error does not leave an open group.
-- Server code (anything under `packages/makecode-mcp/src/server/`) must not write to stdout — the MCP stdio transport owns it. The shared logger already routes Node output to stderr; use it instead of `console.log`.
-- Disable paths, for reference (do not remove these): `localStorage.setItem('mkcp:log','0')` or `?mkcp-log=0` in the browser; `MKCP_LOG=0` in Node; auto-off when `VITEST` / `NODE_ENV=test` is set so tests stay quiet. If you find yourself tempted to silence a specific log to pass a test, fix the test instead — the logger is already test-silent.
-
 ## Package: `makecode-mcp`
 
-### Entry points
+### Entry points & library use
+Exports `./browser` and `./server` only. Never cross-import (`makecode-mcp/server` in browser code or vice versa) — be explicit.
 
-```json
-{
-  "exports": {
-    "./browser": "./dist/browser/index.js",
-    "./server": "./dist/server/index.js"
-  }
-}
-```
+**All** MakeCode iframe integration must go through `@microbit/makecode-embed` (npm; source: https://github.com/microbit-foundation/makecode-embed) — never hand-roll `postMessage`. Vanilla contexts use `./vanilla` (`MakeCodeFrameDriver`, `createMakeCodeRenderBlocks`); React uses `./react`. If a feature seems to need raw postMessage, check the library first — the answer is almost always there.
 
-Never import from `makecode-mcp/server` in browser code and vice versa. The build will enforce this but be explicit in your imports.
+### `MakeCodePanel` (React)
+Wraps `@microbit/makecode-embed/react`. Must: accept `onExecutorReady(executor: BrowserExecutor)` (typed as the interface, not the class); accept optional `onLoadError(reason)`; expose nothing else about its iframe; dispose the adapter on unmount. The `LoadWatchdog` (`src/browser/load-watchdog.ts`) starts at mount and fires `onLoadError` once if neither `onEditorContentLoaded` nor `onWorkspaceLoaded` fires within `MAKECODE_LOAD_TIMEOUT_MS` (30 s); cleared on first ready event. The executor is bound to the panel's iframe for its lifetime, so the same instance across turns sees the same code — no session plumbing from the host.
 
-### Always use `@microbit/makecode-embed`
+### Adapter is cache-free; `setProject` confirms decompile
+`MakeCodeFrameDriverAdapter` is intentionally cache-free: `getProject()` always issues a fresh `saveProject()` and waits for the resulting `workspacesave`; `handleWorkspaceSave` replaces project state rather than merging. (The old cache + partial-text-merge guarded against `workspacesave` events with missing `text` keys, but live traces show MakeCode always emits all `text` fields.) Round-tripping every read costs ~one postMessage hop and guarantees the editor's current state — including mid-turn user edits — is what reads return.
 
-All MakeCode iframe integration — browser executor, server executor Puppeteer code, manual test pages — must use the `@microbit/makecode-embed` library (published as `@microbit/makecode-embed` on npm; source: https://github.com/microbit-foundation/makecode-embed). Never hand-roll the `postMessage` protocol. For non-React contexts use the `./vanilla` export (`MakeCodeFrameDriver`, `createMakeCodeRenderBlocks`); for React use `./react`. If a feature seems to require dropping to raw postMessage, check the library first — the answer is almost always there.
-
-### React component
-
-`MakeCodePanel` is a React component that wraps `@microbit/makecode-embed/react`. It must:
-- Accept an `onExecutorReady(executor: BrowserExecutor) => void` callback prop (typed as the interface, not the concrete class)
-- Accept an optional `onLoadError(reason: string) => void` callback. The panel starts a `LoadWatchdog` (`src/browser/load-watchdog.ts`) at mount that fires `onLoadError` once if neither `onEditorContentLoaded` nor `onWorkspaceLoaded` has fired within `MAKECODE_LOAD_TIMEOUT_MS` (30 s). The watchdog is cleared on first ready event and disposed on unmount.
-- Expose nothing else about its internal iframe to the host app
-- Handle iframe load/unload lifecycle cleanly, including calling `dispose()` on the adapter on unmount
-
-The executor is bound to the panel's iframe for its lifetime. Editor state (the loaded code) lives in the iframe, so the same `IframeExecutor` instance across turns sees the same code — no session plumbing needed from the host app.
+`setProject` makes the *write* side reliable for the tool loop:
+1. **Header continuity** — the adapter tracks the last header from `handleWorkspaceSave` and passes it back into `importProject` so MakeCode keeps the same project identity across `session_set_code` calls.
+2. **Confirm decompile, not just `switchBlocks` reply** — MakeCode replies `success:true` to `switchblocks` even when it silently falls back to JS view (TS can't decompile; shows an in-iframe modal, logs to console only). A healthy decompile emits ≥1 further `workspacesave`; a failed one emits nothing. So `setProject` races the next text-bearing `workspacesave` against `DECOMPILE_CONFIRM_TIMEOUT_MS` (5 s) and on timeout throws `"Code was loaded into the editor but failed to compile to blocks. Fix the TypeScript and call session_set_code again."` Empty `main.ts` imports skip the wait (blank bootstrap emits no follow-up save). If `switchBlocks` itself rejects with a decompile-shaped message (`/cannot convert to blocks|decompile|unsupported syntax|ts\d{4}/i`) it's rewrapped with the same hint; other rejections propagate unwrapped so transport hiccups aren't blamed on the model. The tool loop surfaces all as `isError: true` so the model self-corrects.
 
 ### Puppeteer browser pool
+`BrowserPool` manages one persistent browser process for the server's lifetime: launches lazily on first use, exposes `openPage()` / `openWindow(url)` / `withTab(fn)` (always closing the tab in `finally`), never closes the browser itself, relaunches after a crash. It's typed against a minimal `PageLike` + `BrowserLauncher` callback so it's unit-testable with doubles; real Puppeteer is wired only at `bin.ts` via `adaptPuppeteerBrowser`. An `onDisconnected` listener (identity-guarded so a late disconnect can't null a replacement) evicts a crashed/killed browser immediately instead of waiting for the next `isConnected()` check.
 
-`BrowserPool` manages one persistent Puppeteer browser process for the lifetime of the MCP server. It must:
-- Launch lazily on first use, not at import time
-- Expose `openPage()`, `openWindow(url)`, and a `withTab<T>(fn: (page: PageLike) => Promise<T>): Promise<T>` method
-- Always close the tab in a `finally` block regardless of errors
-- Never close the browser process itself (it stays alive between requests)
-- Handle browser crashes by relaunching on next use
+`PuppeteerTabPool` consumes **two** pools: a **render pool** (always headless, hosts the persistent stateless tab shared by both `*_from_code` tools) and a **session pool** (headless or headed per `--headed` / `MKCP_HEADED=1`, one tab per `session_start`). Headed sessions each open in their own OS window via CDP `Target.createTarget({ newWindow: true })`; the shell URL carries `session=<id>&label=<encoded>` so the shim sets `document.title` (Chromium uses it as the window title).
 
-`BrowserPool` is deliberately typed against a minimal `PageLike` (`close`/`goto`/`evaluate`/`url?`) and a `BrowserLauncher` callback so it can be unit-tested with doubles. Puppeteer is only wired in at `bin.ts`, in the `adaptPuppeteerBrowser` helper that wraps a real `puppeteer.Browser` into a `BrowserLike` (including the CDP-backed `openWindow` implementation).
-
-`PuppeteerTabPool` consumes **two** `BrowserPool`s: a **render pool** (always headless, hosts the persistent stateless tab shared by `get_blocks_img_from_code` and `get_hex_file_from_code`) and a **session pool** (headless or headed per the `--headed` CLI flag / `MKCP_HEADED=1` env var, hosts one tab per `session_start`). In headed mode each session opens in its own OS window via CDP `Target.createTarget({ newWindow: true })`; the shell URL carries `session=<id>&label=<encoded>` query params so the shim sets `document.title` to a label Chromium uses as the OS window title.
-
-### Server target layering
-
+### Server layering
 ```
-bin.ts (CLI)                                                ← parses --headed / MKCP_HEADED
-  └── buildMcpServer({ executor })                          ← src/server/mcp-server.ts
-        └── TabExecutor (implements ServerExecutor)         ← src/server/tab-executor.ts
-              └── TabPool (interface)                       ← src/server/tab-pool.ts
-                    └── PuppeteerTabPool                    ← src/server/puppeteer-tab-pool.ts
-                          ├── renderPool: BrowserPool       ← src/server/browser-pool.ts (always headless)
-                          ├── sessionPool: BrowserPool      ← src/server/browser-pool.ts (headless or headed)
-                          ├── adaptPuppeteerBrowser()       ← src/server/puppeteer-browser-adapter.ts (CDP openWindow)
-                          ├── PuppeteerDriver               ← src/server/puppeteer-driver.ts
-                          └── startShellServer()            ← src/server/shell-server.ts
-                                ↳ serves prebuilt assets    ← dist/shell/{shim.js, shell.html}
-                                                              (sources at src/shell/, bundled at build time)
+bin.ts (CLI, parses --headed / MKCP_HEADED)
+  └── buildMcpServer({ executor })            ← src/server/mcp-server.ts
+        └── TabExecutor (ServerExecutor)      ← src/server/tab-executor.ts
+              └── TabPool (interface)         ← src/server/tab-pool.ts
+                    └── PuppeteerTabPool       ← src/server/puppeteer-tab-pool.ts
+                          ├── renderPool / sessionPool: BrowserPool
+                          ├── adaptPuppeteerBrowser() (CDP openWindow)
+                          ├── PuppeteerDriver  ← src/server/puppeteer-driver.ts
+                          └── startShellServer() ← serves dist/shell/{shim.js, shell.html}
 ```
+`TabExecutor` owns session lifecycle, generates the `session_id`, forwards `{ sessionId, label }` to `TabPool.openTab`, and delegates per-session ops to a `MakeCodeDriver` from a `TabHandle`. `TabPool` is the seam that keeps `TabExecutor` testable without Puppeteer (`PuppeteerTabPool` is the only impl). It also runs an **idle-session reaper** (default 30 min timeout, 1 min interval): each successful per-session call refreshes `lastUsedAt`; the reaper closes stale sessions and remembers up to 256 recent expirations so reuse raises `SessionError("expired")` (precise) rather than `"unknown"`. Override via `new TabExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })`; `idleTimeoutMs: 0` disables it.
 
-`TabExecutor` (implements `ServerExecutor`) owns session lifecycle and delegates every per-session operation to a `MakeCodeDriver` exposed by a `TabHandle`. It generates the `session_id` itself and forwards `{ sessionId, label }` to `TabPool.openTab` so the pool can embed both into the shell URL. `TabPool` is the seam that makes `TabExecutor` unit-testable without Puppeteer. `PuppeteerTabPool` is the only concrete implementation today.
+`PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Don't add more IPC surface (e.g. `page.exposeFunction`) unless a tool genuinely can't be one evaluate call.
 
-`TabExecutor` also runs a background **idle-session reaper** (default 30 min timeout, 1 min interval). Every successful per-session call refreshes the session's `lastUsedAt`; the reaper closes any session that hasn't been touched within the timeout and remembers the id in a bounded set (256 most-recent expirations). Subsequent use of a reaped session raises `SessionError("expired")` instead of `"unknown"` so the LLM gets a precise reason. Construct with `new TabExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })` to override; `idleTimeoutMs: 0` disables the reaper entirely.
+### Shell (browser-side, prebuilt — not shipped as TS)
+Sources under `src/shell/`, bundled at build time by `scripts/build-shim.mjs` (esbuild → `dist/shell/shim.js`, copies `shell.html` + `blocks-viewer.html`; runs after `tsc -b`).
 
-`BrowserPool` registers an `onDisconnected` listener on each launched browser so a CDP-level disconnect (Chrome crash, OS kill) evicts the cached reference immediately. Without the listener, the dead browser would linger until the next `isConnected()` check at call time. The listener is identity-guarded so a late-firing disconnect from a previous browser cannot null out a replacement.
+- `shell.html` — one `<iframe id="mk">` + `<script type="module" src="/shim.js">`. Used for session tabs and the stateless tab.
+- `shim.ts` — runs in the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocksImage`). It **eagerly** starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns that same init promise so `openTab`/`statelessPage` can block until `onEditorContentLoaded`. (Without the eager await, the first tool call would silently trigger and wait on the load while the MCP client already thinks the tool is ready — bad on slow networks.) Each method returns a tagged `ShimResult<T>` (`{ok:true,value} | {ok:false,error}`) so failures don't traverse `page.evaluate` as exceptions picking up a browser-side stack; `PuppeteerDriver` unwraps on the Node side.
+- `blocks-viewer.html` — the MCP Apps (SEP-1865) widget, served via MCP **`resources/read`, not HTTP**. Lets Apps-aware hosts (Claude Desktop) render the blocks PNG **inline in the assistant message** instead of inside the collapsed tool-use accordion. Self-contained page that listens for the host postMessage envelope and shape-walks the payload for an `{type:"image", data, mimeType:"image/*"}` block (shape-walk tolerates envelope differences across Claude Desktop / Claude.ai / VS Code). The base64 `image` block is **never removed** — it stays the canonical result + fallback for non-Apps hosts (LM Studio, Inspector) and the model's vision context. `mcp-server.ts` reads it once at init (fail-fast) and serves it at `ui://makecode-mcp/blocks-viewer.html`; the two image tools advertise that URI via `_meta.ui.resourceUri`.
+- `shell-server.ts` (Node) reads prebuilt `dist/shell/{shim.js, shell.html}` at startup and serves them on an ephemeral `127.0.0.1` port; throws on startup if they're missing rather than 404'ing every call. It does **not** serve `blocks-viewer.html` (that's MCP `resources/read`).
 
-### MCP server shell
-
-The MCP server serves a single static shell page to every Puppeteer tab from a local HTTP server started by `startShellServer()`. Browser-side sources live under `src/shell/` (alongside `src/browser/` / `src/server/` / `src/shared/`) and are bundled at build time — they do **not** ship as TypeScript:
-
-- `src/shell/shell.html` — one `<iframe id="mk">` and a `<script type="module" src="/shim.js">`. Used for both session tabs and the shared stateless tab.
-- `src/shell/shim.ts` — runs inside the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, and exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocksImage`). The shim eagerly starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns the same init promise so `PuppeteerTabPool.openTab` and `statelessPage()` can block until the editor's `onEditorContentLoaded` has fired. This matters on slow networks where MakeCode takes many seconds to load — without the await, the first tool call would itself trigger and wait on the load, but the MCP client meanwhile thinks the tool is ready. Each shim method returns a tagged `ShimResult<T>` (`{ ok: true, value } | { ok: false, error }`) so failures don't traverse `page.evaluate` as exceptions and pick up Puppeteer's browser-side stack frame — `PuppeteerDriver` unwraps the union on the Node side.
-- `src/shell/blocks-viewer.html` — a *second* prebuilt asset, served **via MCP `resources/read` rather than HTTP**. It is the MCP Apps (SEP-1865) widget that lets Claude Desktop and other Apps-aware hosts render the blocks PNG **inline in the assistant message** instead of hiding it inside the collapsed tool-use accordion. The widget is a self-contained HTML page that listens for the host's postMessage envelope, walks the payload looking for an `{type:"image", data, mimeType:"image/*"}` content block, and renders it as `<img src="data:image/png;base64,...">`. The shape-walk is deliberate so the widget tolerates envelope differences between Claude Desktop, Claude.ai, and VS Code. The base64 `image` content block is **not** removed — it remains the canonical tool-result content and the fallback path that LM Studio + the model's vision context rely on. `mcp-server.ts` reads this file once at module init (same fail-fast posture as `shell-server.ts`) and serves it from a `server.registerResource("blocks-viewer", "ui://makecode-mcp/blocks-viewer.html", ...)` registration; the two image-returning tools advertise the URI through `_meta.ui.resourceUri`. Non-Apps MCP hosts ignore `_meta` and continue to show the image in the accordion.
-- `scripts/build-shim.mjs` — esbuild-bundles `src/shell/shim.ts` → `dist/shell/shim.js` (browser ESM, inline sourcemap) and copies both `src/shell/shell.html` → `dist/shell/shell.html` and `src/shell/blocks-viewer.html` → `dist/shell/blocks-viewer.html`. Runs as part of `npm run build` after `tsc -b`.
-- `src/server/shell-server.ts` — Node-side. Reads the prebuilt `dist/shell/{shim.js, shell.html}` at startup and serves them on `http://127.0.0.1:<ephemeral>`. If the prebuilt files are missing it throws on startup rather than 404'ing every tool call — re-run `npm run build` and try again. `dist/shell/blocks-viewer.html` is **not** served here — it's served by `mcp-server.ts` over the MCP `resources/read` JSON-RPC method.
-
-There is exactly one persistent **stateless tab** (`PuppeteerTabPool.statelessPage`) that hosts the same shell + editor as session tabs. `bin.ts` calls `PuppeteerTabPool.prewarm()` at MCP server startup so MakeCode begins loading immediately (don't await — failures are swallowed and the next `withStatelessTab` call retries). All `*_from_code` tools share this tab through `withStatelessTab(fn)`, which serialises calls via a promise-chain mutex so the editor's single-project state can't race. This buys editor-side TS-compile validation for `get_blocks_img_from_code` for free: it routes through the same `setProject` (importProject + switchBlocks + decompile-confirm-wait) that `session_set_code` uses, so TS that doesn't compile throws with the same actionable hint; valid TS that can't be decompiled to blocks passes and renders the grey "raw text" fallback. (The old `render.html` + `render-shim.ts` render-only path no longer exists — the unified editor tab replaces both it and the per-call transient tab that `get_hex_file_from_code` used to spin up.)
-
-`PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Do not add more IPC surface (e.g., `page.exposeFunction`) unless a tool genuinely cannot be expressed as a single evaluate call.
+There is exactly one persistent **stateless tab** (`PuppeteerTabPool.statelessPage`) hosting the same shell+editor. `bin.ts` calls `prewarm()` at startup (don't await — failures are swallowed, next call retries). All `*_from_code` tools share it via `withStatelessTab(fn)`, serialised by a promise-chain mutex so the single-project state can't race. This buys editor-side TS-compile validation for `get_blocks_img_from_code` free — it routes through the same `setProject` as `session_set_code`, so uncompilable TS throws the same hint; valid-but-undecompilable TS renders the grey raw-text fallback. (The old `render.html` + per-call transient tab paths no longer exist — the unified editor tab replaces both.)
 
 ### MCP tool dispatch
+`mcp-server.ts` uses the high-level `McpServer` and registers each tool via a local `reg(name, {description, inputSchema, _meta?}, handler)`. Single source of truth is `serverToolMeta` in `shared/tools.ts` (Zod raw shapes + descriptions); `McpServer` consumes the shapes directly, and `serverTools` (JSON Schema for tests / browser-shaped path) is derived from the same shapes via `z.toJSONSchema(z.strictObject(shape))` — they can't drift.
 
-`src/server/mcp-server.ts` uses the high-level `McpServer` from `@modelcontextprotocol/sdk/server/mcp.js` and registers each tool with `server.registerTool(name, { description, inputSchema, _meta? }, handler)`. The single source of truth is `serverToolMeta` in `shared/tools.ts` — Zod raw shapes + descriptions. `McpServer` consumes the shapes directly; `serverTools` (JSON Schema descriptors used by tests and the browser-shaped path) are derived from the same shapes via `z.toJSONSchema(z.strictObject(shape))` so the two views can never drift.
+`reg`'s optional `meta` arg is forwarded as `_meta`. Only the two image tools use it today (`{ ui: { resourceUri: "ui://makecode-mcp/blocks-viewer.html" } }`); the module also `registerResource(...)`s the widget once and declares the `resources` capability. The widget is **additive** — the `image` content block (from `blocksImageMcpContent`) is still emitted so non-Apps hosts keep working.
 
-The local `reg()` helper takes an optional fourth `meta?: Record<string, unknown>` argument that is forwarded as `_meta` on the tool descriptor. Only the two image-returning tools (`session_get_blocks_img`, `get_blocks_img_from_code`) use this today — both advertise `{ ui: { resourceUri: "ui://makecode-mcp/blocks-viewer.html" } }` so MCP Apps hosts know to render the blocks viewer widget alongside the tool result. The same module also calls `server.registerResource(...)` once to expose the widget HTML at that `ui://` URI; the `resources` capability is declared in the `McpServer` constructor for parity. The widget is **additive** — the existing `image` content block (produced by `blocksImageMcpContent` from `shared/tool-results.ts`) is still emitted unchanged so non-Apps hosts (LM Studio, MCP Inspector) and the LLM's vision context keep working.
+Each handler is wrapped in `safe(name, fn)`, which catches `SessionError` + arbitrary errors and returns `{ isError: true, content: [{type:"text", text: JSON.stringify({error, code})}] }`. Without it, `McpServer` would surface a throw as a transport-level error, losing the `missing`/`unknown`/`expired` taxonomy LLMs self-correct on. (`expired` = idle reaper closed the session; model treats it like `unknown` — start a new one.)
 
-Each handler is wrapped in a `safe(name, fn)` helper that catches `SessionError` and arbitrary errors and returns `{ isError: true, content: [{ type: "text", text: JSON.stringify({ error, code }) }] }`. Without this wrapper `McpServer` would surface a thrown error as a transport-level error, losing the session-code taxonomy (`missing` / `unknown` / `expired`) that LLMs use to self-correct. `expired` is returned by `TabExecutor` when the idle reaper has closed a session for inactivity (default 30 minutes); the model treats it the same as `unknown` — start a new session.
+### CLI, Chrome, .mcpb packaging
+`bin.ts` (the `makecode-mcp` bin) wires `PuppeteerTabPool → TabExecutor → buildMcpServer → StdioServerTransport` and disposes on SIGINT/SIGTERM. It's a standard stdio MCP server — point hosts at `node dist/server/bin.js`. Local manual testing: `npm run dev:test-mcp -w makecode-mcp` (builds + launches MCP Inspector).
 
-### CLI entrypoint
+Chrome is located at startup by `resolveChromePath` (`src/server/chrome-path.ts`): prefers `PUPPETEER_EXECUTABLE_PATH`, else `Launcher.getFirstInstallation()` from `chrome-launcher`; the path is passed to every `puppeteer.launch`. The bundled Chromium download is skipped in the .mcpb install (`PUPPETEER_SKIP_DOWNLOAD=true`) so the bundle stays OS-agnostic — the user supplies Chrome.
 
-`bin.ts` (registered as the `makecode-mcp` bin) wires `PuppeteerTabPool` → `TabExecutor` → `buildMcpServer` → `StdioServerTransport`, and disposes the executor on SIGINT/SIGTERM. The server is a standard stdio MCP server — point Claude Desktop / MCP Inspector at `node dist/server/bin.js` (or `npx makecode-mcp` once installed).
+`manifest.json` + `scripts/build-mcpb.mjs` package the server as a Claude Desktop extension: build, stage `dist/` + `manifest.json` + `README.md` + a trimmed `package.json` into `.mcpb-staging/`, `npm install --omit=dev` (skip-download), `mcpb pack` → `dist/makecode-mcp.mcpb`. Manifest `user_config`: `headed_mode` (→ `MKCP_HEADED`) and `chrome_path` (→ `PUPPETEER_EXECUTABLE_PATH`; empty = auto-detect, so the picker stays optional). **`src/` is not in the bundle** (`.mcpbignore`) — everything browser-side is prebuilt into `dist/shell/`, and `esbuild` is a devDependency. If you ever need raw TS at runtime, pre-bundle a new entry at build time rather than restoring `stage("src")`.
 
-Chrome is located at startup via `resolveChromePath` (`src/server/chrome-path.ts`), which prefers `PUPPETEER_EXECUTABLE_PATH` and otherwise calls `Launcher.getFirstInstallation()` from `chrome-launcher`. The executable path is passed to every `puppeteer.launch` call (both pools). Puppeteer's bundled Chromium download is intentionally skipped in the .mcpb staging install (`PUPPETEER_SKIP_DOWNLOAD=true`) so the extension bundle stays OS-agnostic — the user provides Chrome.
-
-For local manual testing, run `npm run dev:test-mcp -w makecode-mcp`. This builds the package and launches the MCP Inspector (`npx @modelcontextprotocol/inspector`) wired to `node dist/server/bin.js`. See https://modelcontextprotocol.io/docs/tools/inspector for the Inspector UI.
-
-### Claude Desktop extension (.mcpb)
-
-`packages/makecode-mcp/manifest.json` + `scripts/build-mcpb.mjs` package the server as a Claude Desktop extension. The script runs `tsc -b --force` and `node scripts/build-shim.mjs`, then stages `dist/`, `manifest.json`, `README.md`, and a trimmed `package.json` into `.mcpb-staging/`, runs `npm install --omit=dev` there with `PUPPETEER_SKIP_DOWNLOAD=true`, then calls `npx @anthropic-ai/mcpb pack`. The resulting `dist/makecode-mcp.mcpb` is platform-agnostic because Chrome is discovered at runtime. The manifest exposes two `user_config` fields — `headed_mode` (boolean → `MKCP_HEADED` env var) and `chrome_path` (file → `PUPPETEER_EXECUTABLE_PATH`); the resolver treats empty `chrome_path` as "auto-detect", so the file picker can stay optional.
-
-`src/` is **not** in the bundle — `.mcpbignore` excludes it. Everything browser-side that `shell-server.ts` serves is prebuilt into `dist/shell/` by `scripts/build-shim.mjs`. `esbuild` lives in `devDependencies` for the same reason. If you ever need raw TypeScript at runtime again, pre-bundle the new entry at build time rather than restoring `stage("src")`.
-
-### Shared project defaults
-
-Default MakeCode project files (`pxt.json` with `preferredEditor: "blocksprj"`, `main.blocks`, `README.md`) and the empty-editor error message live in `src/shared/project-defaults.ts` as `fillProjectDefaults(text, code)` and `EMPTY_EDITOR_ERROR`. Both executors and the server shim import from here — do not re-declare these constants in new code.
-
-### Shared tool-result codecs
-
-Tool-call result shapes (blocks-image JSON, hex base64, MCP content blocks, and the "too-large to feed back" stubs) live in `src/shared/tool-results.ts`. The browser tool-loop (`packages/app/src/chat/tool-loop.ts`) uses `encodeBlocksImage` / `encodeHex` to produce result strings; the MCP wrapper (`packages/makecode-mcp/src/server/mcp-server.ts`) uses `blocksImageMcpContent` / `hexFileMcpPayload`; the app history flattener (`packages/app/src/chat/webllm-engine.ts`) uses `stubImageResult` / `stubHexResult`; the chat adapter (`packages/app/src/chat/adapter.ts`) uses `decodeBlocksImage`. Do not rebuild these shapes inline.
+### Shared modules — don't re-declare
+- **`shared/project-defaults.ts`** — default project files (`pxt.json` with `preferredEditor: "blocksprj"`, `main.blocks`, `README.md`) + `EMPTY_EDITOR_ERROR`, via `fillProjectDefaults(text, code)`. Both executors and the shim import from here.
+- **`shared/tool-results.ts`** — result codecs: `encodeBlocksImage`/`encodeHex` (tool-loop), `blocksImageMcpContent`/`hexFileMcpPayload` (MCP wrapper), `stubImageResult`/`stubHexResult` (history flatten + meter), `decodeBlocksImage` (adapter). Never rebuild these shapes inline.
 
 ## Package: `app`
 
-### App configuration (`config.ts`)
+### Configuration (`config.ts`)
+Single file for content edited without touching components/engine — stays data-only:
+- **`MODELS`** — user-selectable models (`{ id, shortLabel, label }`); engine + UI pick up new entries automatically. Context-window size is resolved at load time from `prebuiltAppConfig` — don't add it here.
+- **`DEFAULT_MODEL_ID`** (one of `MODELS[].id`), **`PREFAB_PROMPTS`** (comparison opener suggestions), **`SYSTEM_PROMPT`**.
 
-`packages/app/src/config.ts` is the single file for content that is likely to be edited without touching component or engine code:
+Everything else imports these from `config.ts`. `ModelId` is the derived union of ids. Changing `SYSTEM_PROMPT` → update `system-prompt.test.ts`.
 
-- **`MODELS`** — the list of user-selectable models. To add a model, append a `{ id, shortLabel, label }` entry; the engine and UI pick it up automatically.
-- **`DEFAULT_MODEL_ID`** — which model is pre-selected on first visit. Must be one of the `id` values from `MODELS`.
-- **`PREFAB_PROMPTS`** — the built-in prompt suggestions shown in the comparison-mode opener bar.
-- **`SYSTEM_PROMPT`** — the system prompt sent to the LLM at the start of every conversation.
+### WebLLM tool-calling (engine)
+All models (Qwen2.5-Coder 7B default, Hermes-3 8B, Qwen3 8B, Llama-3.1 8B) share one path in `webllm-engine.ts`: inject a tools system prompt, grammar-constrain output via `response_format` to a JSON array of `{name, arguments}`, parse the stream into synthetic `tool_calls` deltas. Add models by appending to `MODELS` — no engine changes.
 
-All other code (`webllm-engine.ts`, `ComparisonLayout.tsx`, `adapter.ts`, `settings.ts`) imports these from `config.ts` rather than defining them locally. `ModelId` is also exported from `config.ts` as the derived union type of model ids.
+WebLLM's native Hermes-2-Pro path is **deliberately bypassed**: its injected prompt omits the `<tool_call></tool_call>` wrapper Hermes-3 was trained on, so Hermes-3 emits bare JSON/markdown that WebLLM's parser then rejects. Owning prompt + parser end-to-end gives reliable behaviour across the whole picker.
 
-When changing the system prompt, also update `packages/app/test/system-prompt.test.ts` (see "Keep tests and docs in sync").
+### Load lifecycle (`useWebLLMSlot`)
+`useWebLLMSlot({ onLoaded? })` (`webllm-slot.ts`) returns `{ completion, completionRef, loadState, loadedModelId, load, cancel }`. `completion` is the render snapshot; **`completionRef` is updated immediately on load, before React re-renders** — use it in closures that run right after `load()` resolves. It internalises: the `LoadHandle` cancel-via-mismatch pattern (a superseded load's progress/result are dropped so the active load owns UI state); the `LoadCancelledError` branch (user cancel → `idle`, not `error`); and **GPU buffer freeing on switch** — `load(B)` calls `cancel()` on any prior handle first (`engine.unload()`), without which switching would leak the prior model's buffers until the next reload.
 
-### WebLLM setup
+Both `App.tsx` and `ComparisonLayout` consume it, but only `App.tsx` passes `onLoaded`. The hook does **not** bump the chat epoch itself — callers decide. Single-chat: changing models **resets the chat** — `ChatThread` owns its `useLocalRuntime` and is keyed on a `chatEpoch` that bumps on `onLoaded`, so it remounts empty. `MakeCodePanel` lives above that boundary, so the iframe + loaded code persist across switches.
 
-The app ships with a user-selectable model picker (`MODELS` in `webllm-engine.ts`). The current options are:
+Requires WebGPU (Chrome 113+). Show clear load progress on first load (~4–5 GB, cached in the Cache API after). If WebGPU is missing, show a clear error — don't silently fall back to CPU without warning.
 
-- **Qwen2.5-Coder 7B Instruct** (`Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC`) — default. Coder-tuned, strong on MakeCode TypeScript.
-- **Hermes-3 Llama 3.1 8B** (`Hermes-3-Llama-3.1-8B-q4f16_1-MLC`).
-- **Qwen3 8B** (`Qwen3-8B-q4f16_1-MLC`).
-- **Llama-3.1 8B Instruct** (`Llama-3.1-8B-Instruct-q4f16_1-MLC`).
+The picker dropdown shows `shortLabel`; the full `label` shows in the loading overlay. A **Load model** button triggers the download; while loading it's disabled and the composer is disabled with a "Load a model to begin" notice. On finish it becomes a "model loaded" pill; changing the dropdown flips it back to the button.
 
-All models share the same tool-calling path in `webllm-engine.ts`: inject a system prompt describing the tools, grammar-constrain output via `response_format` to a JSON array of `{name, arguments}` objects, and parse the streamed JSON into synthetic `tool_calls` deltas. When the schema-constrained output is `[]`, `tool-loop.ts` makes one follow-up call with `tools: []` so the model can stream a plain-text reply. To add a new model, append a `{ id, shortLabel, label }` entry to `MODELS` in `config.ts` — no engine changes required.
+### Tool-call loop (`tool-loop.ts`)
+The model may return `finish_reason: "tool_calls"` repeatedly before final text. Loop: send with tools → if `tool_calls`, dispatch all calls **sequentially in emission order** → append the assistant tool-call message + all result messages → re-send → repeat until `stop` → stream final text. Never truncate/drop tool-call messages mid-loop. If you add a tool, just add a `dispatchTool` case — the browser loop is stateless (no `session_id` injection, no hint enrichment, no sibling ordering).
 
-WebLLM's built-in Hermes-2-Pro native path is deliberately bypassed. Its injected prompt omits the `<tool_call></tool_call>` wrapper instruction Hermes-3 was trained on, so Hermes-3 emits bare JSON or markdown that WebLLM's parser then rejects. Owning the prompt and parser end-to-end gives reliable behaviour across every model in the picker.
+**Sequential, not `Promise.all`:** small models batch `session_get_code` + `session_set_code` + `session_get_blocks_img` in one turn intending order; parallel races — a ~17 ms `session_get_blocks_img` returns before the ~2 s `session_set_code` commits and renders against the pre-set state, throwing `EMPTY_EDITOR_ERROR`. Inference cost dwarfs executor latency, so serialising is free. **Don't reintroduce `Promise.all`.**
 
-The dropdown shows each model's `shortLabel`; the full `label` appears in the loading overlay while the download runs. A **Load model** button next to the dropdown triggers the download explicitly; while loading it is disabled and the composer input + send button are disabled with a "Load a model to begin" notice in the thread viewport. When the selected model finishes loading, the button is replaced by a "model loaded" pill. If the user changes the dropdown after loading, the pill flips back to the button so they can load the new choice.
+Three recovery branches share a `plainTextFollowUp(label)` generator (streams from a tools-disabled completion):
+- **Empty `tool_calls` done-signal** — `finish_reason === "tool_calls"` but the model emitted `[]` → one follow-up call with `tools: []` for a plain-text reply, then return. Never recurses.
+- **Stall before substantive work** — Qwen sometimes emits `[]` on turn 1, describing the workflow in a TS code block instead. Before falling back to plain text, check whether history has any *substantive* call yet (`session_set_code`/`session_get_code`/`session_get_blocks_img`/`get_blocks_img_from_code`); if not, append a `STALL_REMINDER` system message and retry once with tools still on (`stallRetried` flag, at most once per run). Costs one extra inference on purely conversational queries — acceptable.
+- **Repeat-call** — small models sometimes lock into one tool (e.g. `session_get_code` every step). `seenCalls` tracks every dispatched `(name+arguments)`; when *every* call in a batch is a repeat, skip dispatch and yield the plain-text follow-up. A mixed batch still dispatches (interleaved reads are legitimate).
 
-### `useWebLLMSlot` owns the load lifecycle
+### History flattening
+WebLLM's chat templates reject `role:"tool"` and assistant messages with `tool_calls`, and require the last message be `user`/`tool` (`MessageOrderError`). Since we drive the model with our own prompt + grammar, the tool exchange only needs to be visible as text.
 
-The model-load state machine lives in `packages/app/src/chat/webllm-slot.ts` as a `useWebLLMSlot({ onLoaded? })` hook returning `{ completion, completionRef, loadState, loadedModelId, load, cancel }`. `completion` is the render-snapshot value; `completionRef` is the hook's internal ref, updated immediately when the model loads (before React re-renders) — use `completionRef` in closures that run right after `load()` resolves. It internalises:
+`flattenToolHistory` collapses each assistant `tool_calls` message + the following `tool` results into **one** assistant text message (JSON reconstruction + `[result <name>] <content>` lines), preserving `user → assistant → user → assistant`. **Failed attempts (don't repeat):** emitting results as fresh `user` turns made the model treat each result as a new request and loop forever; keeping the assistant message empty + results in a separate `user` message (chasing KV-cache reuse) confused Qwen on turn 1, stalled it to plain-text, and produced prose where tool calls belonged. **Do not split results out of the assistant message.**
 
-- The `LoadHandle` cancellation-via-mismatch pattern (a superseded load's progress + result are silently dropped so the active load owns UI state).
-- The `LoadCancelledError` branch (user cancel resets to `idle`, not `error`).
-- **GPU buffer freeing on switch**: `load(B)` calls `cancel()` on any prior handle before starting B; `cancel()` invokes `engine.unload()` and the underlying `loadWebLLM` reuses the same lambda whether the handle was in-flight or already completed. Without this, switching models would leak the prior model's GPU buffers until the next reload overwrote them.
+After collapsing, if the last message is `assistant`, a fixed `TOOL_CONTINUATION_PROMPT` is appended as `user` to satisfy the last-message rule. It nudges toward plain text but **deliberately doesn't mention `[]`** — spelling it out biased the model toward empty arrays even when it should call tools.
 
-Both `App.tsx` (single-chat) and `ComparisonLayout` (comparison mode) consume this hook — but only `App.tsx` passes an `onLoaded` callback. The hook does NOT bump the chat epoch itself: callers decide whether a new load should reset their thread (single-chat: yes; comparison: no — per-panel threads persist across switches).
+Image results (`session_get_blocks_img*`, ~21 KB base64) are stubbed to a summary — the model can't use the bytes. Hex results are stubbed defensively too (`HEX_TOOL_NAMES`), even though the browser exposes no hex tool, because a ~1.7 MB base64 hex once overflowed the JS stack ("Maximum call stack size exceeded"). The same flatten runs on the tools-disabled follow-up — role rules apply regardless.
 
-Changing models in single-chat mode therefore **resets the chat**. The chat subtree (`ChatThread`) owns its own `useLocalRuntime` and is keyed on a `chatEpoch` counter that bumps each time `useWebLLMSlot.onLoaded` fires — remounting yields a fresh, empty thread. `MakeCodePanel` lives above that boundary, so the iframe, its loaded code, and any open MakeCode session persist across model switches.
+Because the collapse reconstructs JSON (different whitespace/key order from the raw emission), WebLLM's `compareConversationObject` cache check always misses and every loop step full-reprefills — which is why the context meter estimates from chars, not reported `prompt_tokens`.
 
-This requires WebGPU (Chrome 113+). Show a clear loading progress indicator on first load — the model is ~4–5 GB and is cached in the browser's Cache API after the first download.
+### System prompt (browser)
+Must tell the LLM: it's a micro:bit coding assistant; the MakeCode editor on the right is stateful (code from `session_set_code` persists for later `session_get_blocks_img`); `session_set_code` → `session_get_blocks_img` is a valid multi-turn pattern (PNG renders inline); `get_blocks_img_from_code` is self-contained for previews without touching the editor; there is no hex tool — for flash/download/.hex, point to MakeCode's Download button (which also does WebUSB flashing); code is MakeCode TypeScript (not Node.js TS).
 
-If WebGPU is not available, show a clear error message. Do not silently fall back to a CPU path without warning the user about performance implications.
+Must **not** mention `session_start`/`session_end`/`session_id` (server-only) or advertise `session_get_hex_file`/`get_hex_file_from_code` (not on browser).
 
-### Tool-call loop
-
-The LLM may return `finish_reason: "tool_calls"` multiple times before producing a final text response. The loop must handle this correctly:
-
-1. Send message to WebLLM with tools array
-2. If response has `finish_reason: "tool_calls"`, execute all tool calls **sequentially in emission order** (not in parallel — see note below)
-3. Append the assistant tool-call message and all tool result messages to history
-4. Re-send to WebLLM
-5. Repeat until `finish_reason: "stop"`
-6. Stream final text response to the chat UI
-
-Do not truncate or drop tool-call messages from the history mid-loop. The full tool-call exchange must be present for the model to reason correctly.
-
-The loop also handles Qwen-specific quirks:
-- **Empty `tool_calls` as done-signal** — when `finish_reason === "tool_calls"` but no calls were produced (the schema-constrained model emitted `[]`), the loop makes one follow-up call with `tools: []` to let the model stream a plain-text reply, then returns. This never recurses.
-- **Stall-before-substantive-work recovery** — grammar-constrained `[]` is always a valid emission, and in practice Qwen sometimes emits it on turn 1 without calling any tool — describing the tool workflow inside a TypeScript code block instead. Before falling back to the plain-text branch, `runToolLoop` checks whether the history has any *substantive* call yet (`session_set_code`, `session_get_code`, `session_get_blocks_img`, or `get_blocks_img_from_code`). If not, it appends a `STALL_REMINDER` system message and retries once with tools still enabled. Only if the stall persists does it fall back to plain text. The retry fires at most once per run (`stallRetried` flag). The cost is one extra inference on purely conversational queries that correctly emit `[]` — bounded and acceptable for the reliability gain on actionable queries.
-- **Repeat-call recovery** — the smaller models sometimes ignore the system-prompt rule "never call the same tool twice" and lock into a single-tool loop (e.g. `session_get_code` every step). `runToolLoop` tracks every dispatched `(name + arguments)` in a `seenCalls` set; when a batch arrives where *every* call is a repeat, it skips dispatch and yields the plain-text follow-up instead of hammering the same tool until `maxSteps` trips. A mixed batch (some new, some repeats) still dispatches — interleaved reads are legitimate.
-
-The plain-text follow-up itself is shared across all three exits (done-signal, repeat-call, stall fallback) via a local `plainTextFollowUp(label)` generator that streams from a tools-disabled completion.
-
-### WebLLM history flattening
-
-WebLLM's chat templates (e.g. Qwen2.5-Coder) reject `role: "tool"` and assistant messages carrying `tool_calls`, and additionally enforce that the last message be `user` or `tool` (`MessageOrderError`). This engine bypasses WebLLM's native tool-calling path and drives the model with a custom system prompt + JSON grammar, so the tool exchange only needs to be visible to the model as text.
-
-`flattenToolHistory` in `webllm-engine.ts` collapses each assistant `tool_calls` message together with the immediately following `tool` results into a single assistant text message (the JSON the model itself emitted, plus `[result <name>] <content>` lines). This preserves the `user → assistant → user → assistant` alternation the model expects. An earlier attempt that emitted tool results as fresh `user` turns made the model treat every result as a new request and loop forever between `session_get_blocks_img` and `session_get_hex_file` until `maxSteps` tripped.
-
-After collapsing, if the last message is `assistant`, a fixed `TOOL_CONTINUATION_PROMPT` is appended as a `user` message to satisfy WebLLM's last-message rule. The text nudges the model to stop calling tools and produce a plain-text explanation; it deliberately does **not** mention `[]` because spelling out `[]` in the prompt biased the model toward emitting empty arrays even when it should have called tools.
-
-Image (`session_get_blocks_img*`, ~21KB base64) tool results are stubbed to a short summary in the flattened history — the model cannot use the bytes anyway. The flatten also stubs hex tool results defensively (`HEX_TOOL_NAMES`), even though the browser target no longer exposes any hex tool, because feeding a ~1.7 MB base64 hex back through WebLLM's tokenizer used to overflow the JS stack with "Maximum call stack size exceeded".
-
-The same flatten runs on the tools-disabled follow-up path — WebLLM's role rules apply regardless of whether `tools` was passed in.
-
-Because the browser target has no sessions, the loop is stateless: no `session_id` injection, no next-step hint enrichment, no ordering of a setup call before siblings. If you add a new tool, just add a case to the `dispatchTool` switch.
-
-Tool calls within a single batch are dispatched **sequentially** in the order the model emitted them. The smaller models in the picker frequently batch `session_get_code` + `session_set_code` + `session_get_blocks_img` in one turn intending strict ordering; running them in parallel races — a 17ms `session_get_blocks_img` returns before the ~2s `session_set_code` ingest commits, so blocks render against the pre-set state and throw `EMPTY_EDITOR_ERROR`. Inference cost dwarfs executor latency, so serialisation is essentially free. Do not reintroduce `Promise.all` here.
-
-### System prompt
-
-The system prompt must tell the LLM:
-- It is a micro:bit coding assistant
-- The MakeCode editor on the right is stateful across the conversation — code loaded via `session_set_code` persists for later calls like `session_get_blocks_img`
-- `session_set_code` followed by `session_get_blocks_img` is a valid multi-turn pattern (the PNG renders inline in the chat)
-- `get_blocks_img_from_code` is self-contained — use it to preview a snippet without touching the editor
-- The app has no hex-file tool. If the student asks to flash, download, or get the .hex, direct them to MakeCode's own Download button in the panel on the right (which also supports WebUSB flashing).
-- Code should be valid MakeCode TypeScript (not standard Node.js TypeScript)
-
-The browser prompt must not mention `session_start` / `session_end` / `session_id` — those belong to the server target and are irrelevant here. It also must not advertise `session_get_hex_file` or `get_hex_file_from_code` — neither is available on the browser target.
+### Context-window meter
+Send button wrapped in an SVG ring (`chat/context-meter.ts` + `chat/ContextRing.tsx`). Non-obvious bits:
+- **Pure char estimate** — always `estimateUsedTokens({ messages, composerText, systemPrompt, staticOverheadChars })`. Reported `prompt_tokens` is logged (adapter `perf`) but not used as a baseline: with no cache reuse it's a full reprefill each step, so summing overcounts and last-only loses history.
+- **Context size** from `prebuiltAppConfig`, resolved by `resolveContextWindow` in `webllm-engine.ts`. Don't hardcode in `MODELS`.
+- **The estimate must match what the model receives** — image/hex results count as the same `stubImageResult`/`stubHexResult` the flatten substitutes; the tools prompt from `buildToolsSystemPrompt` is `staticOverheadChars` (`TOOLS_PROMPT_CHARS` in `ContextRing.tsx`). Change the flatten or tools prompt → update the meter.
+- **Palette is fixed across accents** — `--ctx-ring-{ok,warn,full,track,streaming}` don't swap with `--accent` (magenta accent + magenta "full" would blend).
+- **Button geometry single-sourced in CSS** (`--composer-btn-size`, `--composer-btn-radius`, `--context-ring-outset`); the mirrored constants in `ContextRing.tsx` (parametric SVG path) must bump together.
 
 ### Comparison mode
+Toggled via `comparisonMode` in `ChatSettings`. Purpose: judge which small model needs the least hand-holding to reach a working program — at 7–8B q4f16, variance is high, so the metric is hand-holding, not same-input parity.
 
-Toggled from settings (`comparisonMode: boolean` in `ChatSettings`). Purpose: evaluate which small model is the most useful as a micro:bit coding assistant by running three independent threads side-by-side. At 7–8B q4f16 sizes, response variance is high; the useful comparison metric is how much hand-holding each model needs to reach a working program, not exact same-input parity.
+**Topology** (`comparison/ComparisonLayout.tsx`, `PANEL_INDICES = [0,1,2]`):
+- Three `ChatPanelView`, each with its own `useLocalRuntime` + adapter; threads persist across switches.
+- Three `MakeCodePanel` iframes mounted at once; only the active is visible (`opacity:0; pointer-events:none` on others). **Never `display:none`** — it reloads the iframe and loses editor state.
+- Exactly **one** `useWebLLMSlot`, serving the active panel. Switching = `unload()` + `reload(otherId)` (~3–5 s from disk cache). Only the active model is in GPU. Don't add a `slots[]` array — single-slot + reload is intentional (the unified-memory swap cost is acceptable).
+- All adapters read the active completion via `slotCompletionRef` (`slot.completionRef`). Inactive panels can't run inference — their composer is a "Switch to this model" button.
+- `App.tsx` branches on `comparisonMode`; the single-chat JSX is an **inlined `singleChatLayout` const, not a nested component** — a nested function is a fresh type each render and would remount `MakeCodePanel`, flashing the editor on every state change.
 
-**Topology**
+**`Thread.composerSlot`** — optional `ReactNode` replacing the default `<Composer />`. `ChatPanelView` uses it for inactive panels (the switch button) and `hideComposer` (passes `null`). The switch button must be `position:absolute; bottom:0` like `.composer` (`.thread-viewport` is `height:100%`, so a static footer renders below it, invisible).
 
-- Three `ChatPanelView` instances (one per index in `PANEL_INDICES = [0, 1, 2]` from `comparison/ComparisonLayout.tsx`). Each owns its own `useLocalRuntime` and adapter; threads persist across model switches.
-- Three `MakeCodePanel` iframes are mounted simultaneously in the rightmost slot. Only the active one is visible (`opacity: 0; pointer-events: none` on the others). **Do not use `display: none`** — it would trigger an iframe reload, losing editor state.
-- Exactly one `useWebLLMSlot` instance lives in `ComparisonLayout` and serves the active panel only. Switching panels = `engine.unload()` + `engine.reload(otherId)` (~3–5 s from disk cache, no re-download). Only the active model is in GPU.
-- All three adapters share the slot's current completion via `slotCompletionRef` (aliased from `slot.completionRef`, the hook's internal ref — updated immediately on model load, before React re-renders). Inactive panels can't actually run inference because their composer is replaced with a "Switch to this model" button — see `Thread.composerSlot` below.
-- App-level `App.tsx` branches on `settings.comparisonMode`. The single-chat JSX is kept as an **inlined `singleChatLayout` const**, NOT a nested function component — a nested function would be a fresh component type on every render, remounting `MakeCodePanel` and reloading the iframe on every state change.
+**Switching** — switch button → `switchActive(index)` (sets `activePanelIndex` synchronously, awaits `slot.load`). Dropdown on the *active* panel → `switchActive(panelIndex, newModelId)` directly (avoids a stale `selectedModelIds` read). Dropdown on an *inactive* panel → updates that slot's id only, no load. Mid-switch re-entry is safe (`slot.load()` always cancels the prior handle).
 
-**`Thread.composerSlot`**
+**Settings** — shared single instance. In comparison mode `App.tsx` renders a floating `.comparison-settings-btn` and passes `<SettingsPanel>` as a `settingsOverlay` prop; the overlay anchors to `.comparison-chats` (relative) so it covers only the chat columns. A `useEffect` closes settings when `comparisonMode` becomes true.
 
-`packages/app/src/chat/Thread.tsx` accepts an optional `composerSlot?: ReactNode` prop. When provided, it replaces the default `<Composer />`. `ChatPanelView` uses it in two cases: inactive panels (renders a "Switch to this model" button) and `hideComposer={true}` (passes `null` to suppress the composer entirely while the shared opener bar is active). When omitted, the default composer renders — single-chat mode is untouched.
+**Shared opener (broadcast)** — when `showOpenerBar` (`allThreadsEmpty && !broadcastPending`), a `.comparison-opener-bar` spans all panels with a `PREFAB_PROMPTS` dropdown + shared input; all panels get `hideComposer` so the bar is the only input. "Send to all" sets `broadcastPending=true` (hides the bar first), then fans out **sequentially**: for each `i`, set `activePanelIndex=i`, `await slot.load(...)`, append the user message to panel `i` and await its turn via `runtime.thread.unstable_on("runEnd", …)`. After the loop `broadcastPending` resets but `allThreadsEmpty` is now false so the bar stays gone. `allThreadsEmpty` derives from `threadHasMessages` state, updated via per-panel `onHasMessages`. No cancel button (~30–60 s total; refresh to abort, or click another panel's switch to cancel implicitly).
 
-The "Switch to this model" button must be `position: absolute; bottom: 0` like `.composer`, because `.thread-viewport` has `height: 100%` — a static-flow footer would render below the viewport and be invisible.
-
-**`switchActive` and model-change semantics**
-
-- Clicking "Switch to this model" on an inactive panel → `switchActive(index)` → sets `activePanelIndex` synchronously and awaits `slot.load(selectedModelIds[index])`.
-- Changing the dropdown on the *active* panel → `handleModelChange` calls `switchActive(panelIndex, newModelId)` directly with the new ID (avoids a stale-closure read of `selectedModelIds` state, since state updates haven't flushed yet).
-- Changing the dropdown on an *inactive* panel → updates that slot's `selectedModelIds[i]` only; no load.
-- Mid-switch re-entry into `switchActive` is safe: `slot.load()` always cancels the prior handle first (the same mechanism that frees GPU buffers — see `useWebLLMSlot`).
-
-**Settings**
-
-The settings overlay is shared in v1 (single instance, single state). In comparison mode, `App.tsx` renders a floating `.comparison-settings-btn` (position: fixed, top-right) and passes the `<SettingsPanel>` JSX as a `settingsOverlay` prop into `ComparisonLayout`. The overlay anchors to `.comparison-chats` (which is `position: relative`), so it covers only the chat columns and leaves the MakeCode editor visible — matching single-chat behaviour. A `useEffect` in `App.tsx` closes the settings panel automatically whenever `settings.comparisonMode` becomes true.
-
-**State reset on mode toggle**
-
-There is no reset action in comparison mode. Toggling the setting off and back on is the implicit reset (per-panel state is fresh on every mode entry and every page load — no localStorage persistence). The three panel dropdowns default to `MODELS[0..2]`; duplicates are allowed.
-
-**Shared opener (broadcast)**
-
-When `showOpenerBar` is true (`allThreadsEmpty && !broadcastPending`), a `.comparison-opener-bar` div is rendered at the bottom of `.comparison-chats`, below `.comparison-panels-row`, spanning all three panels. It contains a prefab-prompts dropdown (`PREFAB_PROMPTS` at module scope in `ComparisonLayout.tsx`) and a shared prompt input. All three panels receive `hideComposer={showOpenerBar}` — this suppresses both the active panel's normal composer and the inactive panels' "Switch to this model" buttons while the bar is visible, so the bar is the only input on screen.
-
-Clicking "Send to all" immediately sets `broadcastPending = true` (hiding the bar before any model starts loading), then fans out *sequentially* — for `i` in `PANEL_INDICES`: set `activePanelIndex = i`, `await slot.load(selectedModelIds[i])`, programmatically append the user message to panel `i`'s runtime and await the full turn via `runtime.thread.unstable_on("runEnd", …)`. After the loop `broadcastPending` resets to false, but by then `allThreadsEmpty` is false too so the bar never reappears. The gate `allThreadsEmpty` is derived from `threadHasMessages: [boolean, boolean, boolean]` state in `ComparisonLayout`, updated via `onHasMessages` callbacks that subscribe to `runtime.thread.getState().messages.length` per panel.
-
-There is no mid-broadcast cancel button. The user can refresh the page; the broadcast takes ~30–60 s total. Implicit cancellation works if the user clicks a different panel's switch button mid-broadcast — `slot.load()` cancels the prior handle.
-
-**Out of scope (do NOT add)**
-
-- Per-panel temperature / system-prompt / sampling overrides.
-- Per-panel reset buttons (mode toggle is the reset).
-- localStorage persistence of threads or model selections.
-- Background prewarm of inactive models (only the active model is in GPU).
-- Three concurrent engine instances. This was considered and rejected — the current single-slot design is simpler and the unified-memory swap cost (~3–5 s) is acceptable. If you find yourself adding a `slots: WebLLMSlot[]` array, stop and surface it.
-- Automated comparison metrics (turn count, success markers).
-
+**Reset / out of scope** — mode toggle is the reset (state is fresh on every entry/page load; no localStorage). Do **not** add: per-panel temperature/prompt/sampling overrides, per-panel reset buttons, localStorage persistence, background prewarm of inactive models, three concurrent engines, or automated metrics.
 
 ## What Not To Do
-
-- Do not add a backend server or API proxy. Everything must run from static files.
-- Do not share executor state between multiple chat sessions. Each page load is a fresh session.
-- Do not duplicate tool schema definitions. They live in `shared/tools.ts` only.
-- Do not duplicate MakeCode project defaults. They live in `shared/project-defaults.ts` only.
-- Do not use `display: none` to hide an inactive MakeCode iframe in comparison mode — it triggers a full reload. Use `opacity: 0; pointer-events: none` instead.
-- Do not nest `singleChatLayout` as a function component in `App.tsx`. A nested function is a fresh component type on every render and would remount `MakeCodePanel`, flashing the editor on every state change. Keep it an inlined JSX expression.
-- Do not introduce three concurrent `WebLLMSlot` instances for comparison mode (one per panel). The single-slot + reload-on-switch design is intentional — see "Out of scope" under Comparison mode.
-- Do not reintroduce `Promise.all` for tool-call batches. Sequential dispatch in emission order is intentional — see Tool-call loop.
+- No backend server or API proxy — everything runs from static files.
+- No shared executor state across chat sessions — each page load is fresh.
+- Don't duplicate tool schemas (`shared/tools.ts`) or project defaults (`shared/project-defaults.ts`).
+- Don't `display:none` an inactive comparison iframe — use `opacity:0; pointer-events:none`.
+- Don't nest `singleChatLayout` as a function component — keep it inlined JSX.
+- Don't run three concurrent `WebLLMSlot`s — single-slot + reload-on-switch is intentional.
+- Don't reintroduce `Promise.all` for tool-call batches — sequential emission order is intentional.

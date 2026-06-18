@@ -123,6 +123,14 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
       let textBuffer = "";
       let totalTextChars = 0;
       let toolCallCount = 0;
+      // prompt_tokens is the full prefill each step, so keep the last (not a
+      // sum); completion_tokens is per-step output, so sum it.
+      let lastPromptTokens: number | undefined;
+      let lastCompletionTokens: number | undefined;
+      let totalCompletionTokens = 0;
+      let completionCount = 0;
+      let prefillTokensPerS: number | undefined;
+      let decodeTokensPerS: number | undefined;
 
       const flush = (): ChatModelRunResult => ({ content: [...parts, ...(textBuffer ? [{ type: "text", text: textBuffer } as const] : [])] });
 
@@ -143,6 +151,13 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
             textBuffer += ev.delta;
             totalTextChars += ev.delta.length;
             yield flush();
+          } else if (ev.type === "usage") {
+            lastPromptTokens = ev.prompt_tokens;
+            lastCompletionTokens = ev.completion_tokens;
+            totalCompletionTokens += ev.completion_tokens;
+            completionCount++;
+            if (ev.prefill_tokens_per_s !== undefined) prefillTokensPerS = ev.prefill_tokens_per_s;
+            if (ev.decode_tokens_per_s !== undefined) decodeTokensPerS = ev.decode_tokens_per_s;
           } else if (ev.type === "tool-call") {
             toolCallCount++;
             log.info(`tool-call event → ${ev.name}`, {
@@ -177,7 +192,16 @@ export function createChatAdapter(deps: ChatAdapterDeps): ChatModelAdapter {
           parts.push({ type: "text", text: textBuffer });
           textBuffer = "";
         }
-        log.info("run() complete", { toolCallCount, totalTextChars });
+        log.info("run() complete", {
+          toolCallCount,
+          totalTextChars,
+          usage: {
+            completions: completionCount,
+            prompt: { last: lastPromptTokens },
+            completion: { last: lastCompletionTokens, total: totalCompletionTokens },
+          },
+          perf: { prefill_tok_per_s: prefillTokensPerS, decode_tok_per_s: decodeTokensPerS },
+        });
         log.groupEnd();
         yield { status: { type: "complete", reason: "stop" }, content: parts };
       } catch (err) {

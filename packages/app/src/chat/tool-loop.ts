@@ -32,6 +32,23 @@ export interface StreamChunk {
       finish_reason: null | "stop" | "tool_calls" | "length";
     },
   ];
+  /** Only set on the last chunk under `stream_options: { include_usage: true }`.
+   *  WebLLM's cache reuse doesn't kick in for our tool-loop (the flatten
+   *  reconstructs JSON, which differs from the model's raw output), so
+   *  treat `prompt_tokens` as the full prefill — useful for perf logging
+   *  only, not session-total tracking. */
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    extra?: {
+      e2e_latency_s: number;
+      prefill_tokens_per_s: number;
+      decode_tokens_per_s: number;
+      time_to_first_token_s: number;
+      time_per_output_token_s: number;
+    };
+  };
 }
 
 export interface CompletionOptions {
@@ -50,7 +67,16 @@ export type ChatCompletionFn = (params: {
 
 export type ToolLoopEvent =
   | { type: "text-delta"; delta: string }
-  | { type: "tool-call"; id: string; name: string; args: unknown; result: string; isError: boolean };
+  | { type: "tool-call"; id: string; name: string; args: unknown; result: string; isError: boolean }
+  /** One per completion. See {@link StreamChunk.usage}: `prompt_tokens` is a
+   *  full prefill (read the last, don't sum); `completion_tokens` can be summed. */
+  | {
+      type: "usage";
+      prompt_tokens: number;
+      completion_tokens: number;
+      prefill_tokens_per_s?: number;
+      decode_tokens_per_s?: number;
+    };
 
 export interface ToolLoopOptions {
   completion: ChatCompletionFn;
@@ -163,6 +189,15 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
         text += content;
         yield { type: "text-delta", delta: content };
       }
+      if (chunk.usage) {
+        yield {
+          type: "usage",
+          prompt_tokens: chunk.usage.prompt_tokens,
+          completion_tokens: chunk.usage.completion_tokens,
+          prefill_tokens_per_s: chunk.usage.extra?.prefill_tokens_per_s,
+          decode_tokens_per_s: chunk.usage.extra?.decode_tokens_per_s,
+        };
+      }
     }
     log.info(`plain-text follow-up complete (${label})`, { chars: text.length, preview: preview(text) });
   }
@@ -191,6 +226,15 @@ export async function* runToolLoop(opts: ToolLoopOptions): AsyncIterable<ToolLoo
 
       for await (const chunk of stream) {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        if (chunk.usage) {
+          yield {
+            type: "usage",
+            prompt_tokens: chunk.usage.prompt_tokens,
+            completion_tokens: chunk.usage.completion_tokens,
+            prefill_tokens_per_s: chunk.usage.extra?.prefill_tokens_per_s,
+            decode_tokens_per_s: chunk.usage.extra?.decode_tokens_per_s,
+          };
+        }
         const choice = chunk.choices[0];
         if (!choice) continue;
         const { delta } = choice;

@@ -1,4 +1,5 @@
 import type {
+  AppConfig,
   ChatCompletionChunk,
   ChatCompletionMessageParam,
   InitProgressReport,
@@ -44,7 +45,10 @@ const log = createLogger("webllm");
 // the model to. Shape matches Hermes-2-Pro's officialHermes2FunctionCallSchema.
 const FUNCTION_CALL_SCHEMA_ARRAY = `{"type":"array","items":{"properties":{"arguments":{"title":"Arguments","type":"object"},"name":{"title":"Name","type":"string"}},"required":["arguments","name"],"title":"FunctionCall","type":"object"}}`;
 
-function buildToolsSystemPrompt(tools: unknown[]): string {
+/** The tools-describing system prompt the engine injects on every tools-enabled
+ *  completion. Exported so the context meter can measure the same overhead
+ *  the model actually receives (~400 tokens of schema text per turn). */
+export function buildToolsSystemPrompt(tools: unknown[]): string {
   return (
     `You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. ` +
     `You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. ` +
@@ -66,12 +70,11 @@ export function isWebGPUSupported(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
-// WebLLM's chat templates reject role:"tool" and assistant `tool_calls`. We
-// bypass the native tool path and own the prompt + grammar, so tool exchanges
-// only need to be visible as text. Collapse each assistant tool_calls message
-// + following tool results into one assistant text message — preserving the
-// user→assistant alternation. Emitting results as fresh user turns made the
-// model treat each result as a new request and loop forever.
+// WebLLM's chat templates reject role:"tool" and assistant tool_calls, and
+// require the last message be user/tool. Collapse each assistant{tool_calls}
+// + following tool messages into one assistant text message (JSON the model
+// emitted + [result <name>] <content> lines). Emitting results as fresh user
+// turns made the model treat each result as a new request and loop forever.
 export function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -94,9 +97,6 @@ export function flattenToolHistory(messages: OpenAIMessage[]): OpenAIMessage[] {
     }
     out.push(m);
   }
-  // WebLLM also enforces that the last message be `user` or `tool`. After a
-  // tool round-trip the collapsed history ends with `assistant`, so append a
-  // fixed continuation prompt that nudges the model to stop calling tools.
   if (out.length > 0 && out[out.length - 1].role === "assistant") {
     out.push({ role: "user", content: TOOL_CONTINUATION_PROMPT });
   }
@@ -122,19 +122,20 @@ function safeParseArgs(raw: string): unknown {
   }
 }
 
-async function* parseToolCallStream(
+export async function* parseToolCallStream(
   stream: AsyncIterable<ChatCompletionChunk>,
 ): AsyncIterable<StreamChunk> {
   // The engine streams content deltas holding the JSON array. Suppress them
   // from the caller and emit one synthetic chunk at end with tool_calls parsed.
   let buffer = "";
   let finish: StreamChunk["choices"][0]["finish_reason"] = null;
+  let usage: StreamChunk["usage"] | undefined;
   for await (const chunk of stream) {
+    if (chunk.usage) usage = chunk.usage; // last chunk under include_usage:true
     const choice = chunk.choices?.[0];
     if (!choice) continue;
     if (choice.delta?.content) buffer += choice.delta.content;
-    // WebLLM also surfaces "abort"; collapse it into the tool_calls branch
-    // below so the loop reads it as a non-terminal completion.
+    // Collapse WebLLM's "abort" into tool_calls so the loop treats it as non-terminal.
     if (choice.finish_reason) {
       finish = choice.finish_reason === "abort" ? "tool_calls" : choice.finish_reason;
     }
@@ -176,6 +177,7 @@ async function* parseToolCallStream(
         finish_reason: finish === "stop" || finish === "length" ? "tool_calls" : (finish ?? "tool_calls"),
       },
     ],
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -189,11 +191,28 @@ export class LoadCancelledError extends Error {
   }
 }
 
+/** Context-window size the engine runs `modelId` with, from
+ *  `prebuiltAppConfig…overrides.context_window_size`. `null` if the record
+ *  lacks the override (older builds) — the UI hides the meter then. */
+export function resolveContextWindow(appConfig: AppConfig, modelId: string): number | null {
+  return (
+    appConfig.model_list.find((m) => m.model_id === modelId)?.overrides?.context_window_size ?? null
+  );
+}
+
+/** What a successful {@link loadWebLLM} resolves with. `contextWindow` is
+ *  {@link resolveContextWindow} for the loaded model — the value the engine is
+ *  actually running with. May be `null` for older model records (see there). */
+export type LoadedModel = {
+  completion: ChatCompletionFn;
+  contextWindow: number | null;
+};
+
 /** Handle returned by {@link loadWebLLM} so the caller can cancel an
  *  in-flight load. `cancel()` aborts the model fetch via `engine.unload()` and
  *  causes `promise` to reject with {@link LoadCancelledError}. */
 export type LoadHandle = {
-  promise: Promise<ChatCompletionFn>;
+  promise: Promise<LoadedModel>;
   cancel: () => void;
 };
 
@@ -206,7 +225,7 @@ export function loadWebLLM(
     // the promise reject anyway so early cancels are honoured.
   };
   let cancelled = false;
-  const promise = (async (): Promise<ChatCompletionFn> => {
+  const promise = (async (): Promise<LoadedModel> => {
     if (!isWebGPUSupported()) {
       log.error("WebGPU unavailable — refusing to load model");
       throw new Error("WebGPU is not available in this browser. Chrome 113+ is required.");
@@ -256,9 +275,10 @@ export function loadWebLLM(
       engine.unload().catch((err) => log.warn("post-cancel unload rejected", err));
       throw new LoadCancelledError();
     }
-    log.info("engine ready", { modelId });
+    const contextWindow = resolveContextWindow(webllm.prebuiltAppConfig, modelId);
+    log.info("engine ready", { modelId, contextWindow });
 
-    return async ({ messages, tools, signal: _signal, options }) => {
+    const completion: ChatCompletionFn = async ({ messages, tools, signal: _signal, options }) => {
     const hasTools = tools.length > 0;
     const samplingOpts: Record<string, unknown> = {};
     if (typeof options?.temperature === "number") samplingOpts.temperature = options.temperature;
@@ -277,6 +297,7 @@ export function loadWebLLM(
       const stream = await engine.chat.completions.create({
         messages: toWebLLMMessages([...system, ...rest]),
         stream: true,
+        stream_options: { include_usage: true },
         ...samplingOpts,
       });
       return stream as unknown as AsyncIterable<StreamChunk>;
@@ -303,10 +324,12 @@ export function loadWebLLM(
       messages: toWebLLMMessages(withSystem),
       response_format: { type: "json_object", schema: FUNCTION_CALL_SCHEMA_ARRAY },
       stream: true,
+      stream_options: { include_usage: true },
       ...samplingOpts,
     });
       return parseToolCallStream(stream);
     };
+    return { completion, contextWindow };
   })();
   return {
     promise,

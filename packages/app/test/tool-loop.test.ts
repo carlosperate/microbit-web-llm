@@ -521,6 +521,30 @@ describe("runToolLoop", () => {
     }).rejects.toThrow(/max.*step/i);
   });
 
+  it("forwards usage events from each completion chunk that carries one", async () => {
+    // WebLLM emits one usage per completion when stream_options.include_usage
+    // is set. With KV-cache reuse, prompt_tokens is the *delta* per turn and
+    // the consumer (adapter) is expected to sum across events.
+    const engine: ChatCompletionFn = async () =>
+      asStream([
+        chunk({ content: "Hello" }),
+        chunk({}, "stop"),
+        // Final usage chunk with empty choices (per include_usage protocol).
+        { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 42, completion_tokens: 9, total_tokens: 51 } },
+      ]);
+    const usageEvents: Array<{ prompt_tokens: number; completion_tokens: number }> = [];
+    for await (const e of runToolLoop({
+      completion: engine,
+      executor: makeExecutor(),
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      signal: new AbortController().signal,
+    })) {
+      if (e.type === "usage") usageEvents.push({ prompt_tokens: e.prompt_tokens, completion_tokens: e.completion_tokens });
+    }
+    expect(usageEvents).toEqual([{ prompt_tokens: 42, completion_tokens: 9 }]);
+  });
+
   it("breaks out to a plain-text follow-up when the model repeats a tool call", async () => {
     const calls: string[] = [];
     const engine: ChatCompletionFn = async ({ tools }) => {

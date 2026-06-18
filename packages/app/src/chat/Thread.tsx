@@ -11,8 +11,19 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { IMAGE_TOOL_NAMES } from "makecode-mcp/browser";
+import { ContextRing } from "./ContextRing.js";
 
-export function Thread({ composerSlot }: { composerSlot?: ReactNode } = {}) {
+export function Thread({
+  composerSlot,
+  contextWindow,
+  systemPrompt,
+}: {
+  composerSlot?: ReactNode;
+  /** Null hides the meter ring. */
+  contextWindow?: number | null;
+  /** Fed to the context meter so its estimate matches what the engine sends. */
+  systemPrompt: string;
+} = { systemPrompt: "" }) {
   return (
     <ThreadPrimitive.Root className="thread-root">
       <ThreadPrimitive.Viewport className="thread-viewport">
@@ -26,7 +37,7 @@ export function Thread({ composerSlot }: { composerSlot?: ReactNode } = {}) {
           }}
         />
       </ThreadPrimitive.Viewport>
-      {composerSlot !== undefined ? composerSlot : <Composer />}
+      {composerSlot !== undefined ? composerSlot : <Composer contextWindow={contextWindow} systemPrompt={systemPrompt} />}
     </ThreadPrimitive.Root>
   );
 }
@@ -176,7 +187,13 @@ function truncate(s: string, n: number) {
   return s.length > n ? `${s.slice(0, n)}… (${s.length - n} more chars)` : s;
 }
 
-function Composer() {
+function Composer({
+  contextWindow,
+  systemPrompt,
+}: {
+  contextWindow?: number | null;
+  systemPrompt: string;
+}) {
   return (
     <ComposerPrimitive.Root className="composer">
       <div className="composer-inner">
@@ -186,12 +203,15 @@ function Composer() {
           placeholder="Ask for a micro:bit program…"
           className="composer-input"
         />
-        <ThreadPrimitive.If running={false}>
-          <ComposerPrimitive.Send className="composer-send">↑</ComposerPrimitive.Send>
-        </ThreadPrimitive.If>
-        <ThreadPrimitive.If running>
-          <ComposerPrimitive.Cancel className="composer-cancel">■</ComposerPrimitive.Cancel>
-        </ThreadPrimitive.If>
+        <div className="composer-send-host">
+          {contextWindow ? <ContextRing contextWindow={contextWindow} systemPrompt={systemPrompt} /> : null}
+          <ThreadPrimitive.If running={false}>
+            <ComposerPrimitive.Send className="composer-send">↑</ComposerPrimitive.Send>
+          </ThreadPrimitive.If>
+          <ThreadPrimitive.If running>
+            <ComposerPrimitive.Cancel className="composer-cancel">■</ComposerPrimitive.Cancel>
+          </ThreadPrimitive.If>
+        </div>
       </div>
     </ComposerPrimitive.Root>
   );

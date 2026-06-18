@@ -1,8 +1,10 @@
 import { TOOL } from "makecode-mcp/browser";
 
 // ── Models ──────────────────────────────────────────────────────────────────
-// To add a model: append a { id, shortLabel, label } entry. The engine and UI
-// pick it up automatically — no other changes needed.
+// To add a model: append a { id, shortLabel, label } entry — the engine and UI
+// pick it up automatically. Context-window size is NOT listed here: it's read at
+// load time from `prebuiltAppConfig` (source of truth, and the ceiling baked into
+// the WASM via the `ctxNk` token in the model_lib filename). See resolveContextWindow.
 export const MODELS = [
   {
     id: "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",

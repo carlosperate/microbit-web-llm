@@ -8,6 +8,19 @@
   --msg-area-bg: #f7f9fb;
   --divider: #b0eaf8;
   --makecode-blue: #3454D1;
+  /* Composer button geometry — host wrapper, buttons, and the ring SVG derive
+     from these. The mirror constants in chat/ContextRing.tsx
+     (BUTTON_SIZE/BUTTON_RADIUS/RING_OUTSET) must be bumped together. */
+  --composer-btn-size: 28px;
+  --composer-btn-radius: 8px;
+  --context-ring-outset: 3px;
+  /* Context-meter ring colours. Fixed palette — does NOT swap with --accent,
+     else "full" red would blend in magenta mode. White = streaming (stop button). */
+  --ctx-ring-ok:    #16A34A;
+  --ctx-ring-warn:  #F59E0B;
+  --ctx-ring-full:  #DC2626;
+  --ctx-ring-track: rgba(0, 0, 0, 0.10);
+  --ctx-ring-streaming: #FFFFFF;
 }
 
 /* ── Reset & base ────────────────────────────────────────────── */
@@ -470,7 +483,7 @@ body {
   background: white;
   border: 1.5px solid var(--accent-border);
   border-radius: 14px;
-  padding: 5px 8px 5px 14px;
+  padding: 8px 8px 8px 14px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.04);
   transition: border-color 0.15s;
 }
@@ -490,44 +503,67 @@ body {
   overflow-y: auto;
 }
 .composer-input::placeholder { color: #bbb; }
-.composer-send {
-  background: var(--accent);
+.composer-send,
+.composer-cancel {
+  width: var(--composer-btn-size);
+  height: var(--composer-btn-size);
+  border-radius: var(--composer-btn-radius);
   color: white;
   border: none;
-  border-radius: 10px;
-  width: 36px;
-  height: 36px;
   flex-shrink: 0;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
   line-height: 1;
-  transition: all 0.15s;
   padding: 0;
   font-family: inherit;
+  transition: all 0.15s;
 }
+.composer-send { background: var(--accent); font-size: 16px; }
 .composer-send:disabled { opacity: 0.4; transform: scale(0.92); cursor: default; }
 .composer-send:not(:disabled):hover { background: var(--accent-dark); }
-.composer-cancel {
-  background: #ef4444;
-  color: white;
-  border: none;
-  border-radius: 10px;
-  width: 36px;
-  height: 36px;
+.composer-cancel { background: #ef4444; font-size: 13px; }
+.composer-cancel:hover { background: #dc2626; }
+
+/* Wraps the button + ring SVG so the ring can sit absolutely behind the
+   button without affecting flex layout (it extends past via negative inset). */
+.composer-send-host {
+  position: relative;
+  width: var(--composer-btn-size);
+  height: var(--composer-btn-size);
   flex-shrink: 0;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  padding: 0;
-  font-family: inherit;
-  transition: background 0.15s;
 }
-.composer-cancel:hover { background: #dc2626; }
+.composer-send-host .composer-send,
+.composer-send-host .composer-cancel {
+  position: relative;
+  z-index: 1;
+}
+.context-ring {
+  position: absolute;
+  inset: calc(-1 * var(--context-ring-outset));
+  width: calc(var(--composer-btn-size) + 2 * var(--context-ring-outset));
+  height: calc(var(--composer-btn-size) + 2 * var(--context-ring-outset));
+  pointer-events: none;
+  z-index: 0;
+}
+.context-ring .context-ring-track {
+  stroke: var(--ctx-ring-track);
+}
+.context-ring .context-ring-fill {
+  stroke: var(--ctx-ring-ok);
+  transition: stroke 150ms ease, stroke-dasharray 150ms ease;
+}
+.context-ring[data-level="warn"] .context-ring-fill { stroke: var(--ctx-ring-warn); }
+.context-ring[data-level="full"] .context-ring-fill { stroke: var(--ctx-ring-full); }
+/* Inverted ring while the button is in stop state. Without this swap the fill
+   would clash with the red stop background (especially at "full"). */
+.context-ring.context-ring-streaming .context-ring-fill {
+  stroke: var(--ctx-ring-streaming);
+}
 
 /* ── Editor pane ─────────────────────────────────────────────── */
 .editor-pane {
@@ -767,12 +803,14 @@ body {
     padding: 26px 14px;
   }
   .composer-inner {
-    padding: 2px 8px 2px 14px;
-  }
-  .composer-send,
-  .composer-cancel {
-    width: 31px;
-    height: 31px;
+    border-radius: 8px;
+    bottom: 9px;
+    padding: 4px 4px 4px 14px;
+    /* Drives --composer-btn-size for the descendant button + ring. Set on
+       .composer-inner rather than :root because the latter doesn't reliably
+       override the top-of-file declaration through CSS variable inheritance. */
+    --composer-btn-size: 24px;
+    --composer-btn-radius: 6px;
   }
 }
 

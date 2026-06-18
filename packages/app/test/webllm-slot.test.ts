@@ -17,7 +17,10 @@ const { mockUnload, MockMLCEngine } = vi.hoisted(() => {
   return { mockUnload, MockMLCEngine };
 });
 
-vi.mock("@mlc-ai/web-llm", () => ({ MLCEngine: MockMLCEngine }));
+vi.mock("@mlc-ai/web-llm", () => ({
+  MLCEngine: MockMLCEngine,
+  prebuiltAppConfig: { model_list: [] as Array<{ model_id: string; overrides?: { context_window_size?: number } }> },
+}));
 
 describe("useWebLLMSlot load sequence", () => {
   let originalNavigator: typeof globalThis.navigator;

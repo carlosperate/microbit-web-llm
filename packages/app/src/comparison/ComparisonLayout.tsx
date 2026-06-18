@@ -5,7 +5,7 @@ import type { BrowserExecutor } from "makecode-mcp/browser";
 import { createLogger, preview } from "makecode-mcp/browser";
 import { createChatAdapter } from "../chat/adapter.js";
 import type { ChatSettings } from "../chat/settings.js";
-import { MODELS, type ModelId, PREFAB_PROMPTS } from "../config.js";
+import { MODELS, SYSTEM_PROMPT, type ModelId, PREFAB_PROMPTS } from "../config.js";
 import { useWebLLMSlot } from "../chat/webllm-slot.js";
 import { ChatPanelView } from "./ChatPanelView.js";
 
@@ -209,6 +209,8 @@ export function ComparisonLayout({
               onSwitchActive={() => handleSwitchActive(i)}
               adapter={adapters[i]}
               loadState={i === activePanelIndex ? slot.loadState : undefined}
+              contextWindow={i === activePanelIndex ? slot.loadedContextWindow : null}
+              systemPrompt={settings.systemPrompt.trim() || SYSTEM_PROMPT}
               runtimeRef={runtimeRefs.current[i]}
               onHasMessages={(v) => handleHasMessages(i, v)}
               hideComposer={showOpenerBar}

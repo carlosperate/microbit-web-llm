@@ -20,6 +20,8 @@ export type WebLLMSlot = {
   completionRef: { readonly current: ChatCompletionFn | null };
   loadState: LoadState;
   loadedModelId: ModelId | null;
+  /** Loaded model's context window; `null` until a model is loaded. */
+  loadedContextWindow: number | null;
   load: (modelId: ModelId) => Promise<void>;
   cancel: () => void;
 };
@@ -31,6 +33,7 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
       : { status: "unsupported", reason: "WebGPU is not available. Please use Chrome 113+ on a supported GPU." },
   );
   const [loadedModelId, setLoadedModelId] = useState<ModelId | null>(null);
+  const [loadedContextWindow, setLoadedContextWindow] = useState<number | null>(null);
   const completionRef = useRef<ChatCompletionFn | null>(null);
   const loadHandleRef = useRef<LoadHandle | null>(null);
   const onLoadedRef = useRef(opts?.onLoaded);
@@ -50,13 +53,14 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
     );
     loadHandleRef.current = handle;
     try {
-      const completion = await handle.promise;
+      const { completion, contextWindow } = await handle.promise;
       if (loadHandleRef.current !== handle) return;
       completionRef.current = completion;
       setLoadedModelId(modelId);
+      setLoadedContextWindow(contextWindow);
       setLoadState({ status: "ready" });
       onLoadedRef.current?.();
-      log.info("slot: model ready", { modelId });
+      log.info("slot: model ready", { modelId, contextWindow });
     } catch (err) {
       if (loadHandleRef.current !== handle) return;
       loadHandleRef.current = null;
@@ -64,12 +68,14 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
         log.info("slot: load cancelled", { modelId });
         completionRef.current = null;
         setLoadedModelId(null);
+        setLoadedContextWindow(null);
         setLoadState({ status: "idle" });
         return;
       }
       log.error("slot: load failed", err);
       completionRef.current = null;
       setLoadedModelId(null);
+      setLoadedContextWindow(null);
       setLoadState({ status: "error", error: err instanceof Error ? err : new Error(String(err)) });
     }
   }, []);
@@ -81,6 +87,7 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
     loadHandleRef.current = null;
     completionRef.current = null;
     setLoadedModelId(null);
+    setLoadedContextWindow(null);
     setLoadState({ status: "idle" });
     handle.cancel();
   }, []);
@@ -90,6 +97,7 @@ export function useWebLLMSlot(opts?: { onLoaded?: () => void }): WebLLMSlot {
     completionRef,
     loadState,
     loadedModelId,
+    loadedContextWindow,
     load,
     cancel,
   };

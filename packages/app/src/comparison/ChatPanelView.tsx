@@ -13,6 +13,9 @@ export interface ChatPanelViewProps {
   onSwitchActive: () => void;
   adapter: ChatModelAdapter;
   loadState?: LoadState;
+  /** Only set for the active panel; the shared slot only knows one loaded model. */
+  contextWindow?: number | null;
+  systemPrompt: string;
   runtimeRef?: { current: AssistantRuntime | null };
   onHasMessages?: (hasMessages: boolean) => void;
   hideComposer?: boolean;
@@ -26,6 +29,8 @@ export function ChatPanelView({
   onSwitchActive,
   adapter,
   loadState,
+  contextWindow,
+  systemPrompt,
   runtimeRef,
   onHasMessages,
   hideComposer,
@@ -89,7 +94,7 @@ export function ChatPanelView({
       </header>
       <div className="chat-body">
         <AssistantRuntimeProvider runtime={runtime}>
-          <Thread composerSlot={composerSlot} />
+          <Thread composerSlot={composerSlot} contextWindow={contextWindow ?? null} systemPrompt={systemPrompt} />
         </AssistantRuntimeProvider>
         {isLoading && (
           <div className="model-gate-overlay" data-testid="comparison-load-overlay">
