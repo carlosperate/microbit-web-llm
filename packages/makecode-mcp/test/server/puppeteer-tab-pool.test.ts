@@ -233,6 +233,63 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(order).toEqual(["1:enter", "1:exit", "2:enter"]);
   });
 
+  it("withStatelessTab rebuilds the stateless tab and retries once when the page dies", async () => {
+    // Chrome can discard/freeze an idle background tab (or its renderer is
+    // recycled), detaching the frame so the next page.evaluate throws. The
+    // stateless path is pure, so a transparent rebuild + retry must recover.
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    let calls = 0;
+    const result = await pool.withStatelessTab(async () => {
+      calls++;
+      if (calls === 1) {
+        throw new Error("Attempted to use detached Frame '16147B7AF484C3'");
+      }
+      return "ok";
+    });
+
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
+    // Original stateless tab opened, died, replacement opened.
+    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
+    // The dead page was closed so it doesn't leak.
+    expect(renderPool.pages[0].close).toHaveBeenCalledOnce();
+  });
+
+  it("withStatelessTab does not retry on a normal (non-dead-page) error", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    let calls = 0;
+    await expect(
+      pool.withStatelessTab(async () => {
+        calls++;
+        throw new Error("failed to compile to blocks");
+      }),
+    ).rejects.toThrow(/failed to compile to blocks/);
+    expect(calls).toBe(1);
+    expect(renderPool.openPage).toHaveBeenCalledOnce();
+  });
+
+  it("withStatelessTab gives up after one retry if the replacement also dies", async () => {
+    const renderPool = makePoolDouble();
+    const sessionPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+
+    let calls = 0;
+    await expect(
+      pool.withStatelessTab(async () => {
+        calls++;
+        throw new Error("Target closed");
+      }),
+    ).rejects.toThrow(/Target closed/);
+    expect(calls).toBe(2);
+    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
+  });
+
   it("withStatelessTab still releases the lock if the user fn throws", async () => {
     const renderPool = makePoolDouble();
     const sessionPool = makePoolDouble();

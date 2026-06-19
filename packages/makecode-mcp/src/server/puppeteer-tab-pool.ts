@@ -1,6 +1,7 @@
 import { createLogger } from "../shared/logger.js";
 import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
+import { isDeadPageError } from "./page-errors.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
 import { startShellServer, type ShellServer } from "./shell-server.js";
 import type { OpenTabOptions, TabHandle, TabPool } from "./tab-pool.js";
@@ -126,10 +127,33 @@ export class PuppeteerTabPool implements TabPool {
     });
     try {
       await previous.catch(() => {});
-      const page = await this.statelessPage();
-      return await fn(new PuppeteerDriver(page));
+      return await this.runStateless(fn);
     } finally {
       release();
+    }
+  }
+
+  // Runs fn against the persistent stateless tab, rebuilding it once if the
+  // page has died (Chrome discarded/froze the idle tab, renderer recycled,
+  // OOPIF re-attached). The stateless path is pure (fn re-imports its code and
+  // re-renders), so the retry is fully transparent. Bounded to one retry so a
+  // genuinely broken environment fails fast instead of looping. Safe under the
+  // chained-promise mutex: only one runStateless runs at a time.
+  private async runStateless<T>(
+    fn: (driver: MakeCodeDriver) => Promise<T>,
+  ): Promise<T> {
+    const page = await this.statelessPage();
+    try {
+      return await fn(new PuppeteerDriver(page));
+    } catch (err) {
+      if (!isDeadPageError(err)) throw err;
+      log.warn("stateless tab died, rebuilding and retrying once", {
+        error: String(err),
+      });
+      this.statelessPagePromise = null;
+      await page.close().catch(() => {});
+      const fresh = await this.statelessPage();
+      return fn(new PuppeteerDriver(fresh));
     }
   }
 

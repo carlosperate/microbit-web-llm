@@ -231,6 +231,44 @@ describe("TabExecutor — stateless _from_code tools", () => {
   });
 });
 
+describe("TabExecutor — dead session tab", () => {
+  it("converts a detached-frame error during a session op into SessionError(expired) and closes the tab", async () => {
+    // Headed mode: the user can close the editor window at any time; or Chrome
+    // discards an idle tab. The next op hits a dead page — surface a clean
+    // 'expired' so the model starts a new session, not the raw Puppeteer string.
+    const { pool, handles } = makePool();
+    const exec = new TabExecutor(pool, { reapIntervalMs: 0 });
+    const { session_id } = await exec.startSession();
+    handles[0].driver.getProject.mockRejectedValueOnce(
+      new Error("Attempted to use detached Frame '16147B7AF484C3'"),
+    );
+    await expect(exec.getCurrentCode(session_id)).rejects.toMatchObject({
+      name: "SessionError",
+      code: "expired",
+    });
+    expect(handles[0].close).toHaveBeenCalledOnce();
+    // The session is gone — a later use also reports expired, not unknown.
+    await expect(exec.getCurrentCode(session_id)).rejects.toMatchObject({
+      code: "expired",
+    });
+  });
+
+  it("lets a normal tool error propagate unchanged (session stays usable)", async () => {
+    const { pool, handles } = makePool();
+    const exec = new TabExecutor(pool, { reapIntervalMs: 0 });
+    const { session_id } = await exec.startSession();
+    handles[0].driver.getProject.mockRejectedValueOnce(
+      new Error("failed to compile to blocks"),
+    );
+    await expect(exec.getCurrentCode(session_id)).rejects.toThrow(
+      /failed to compile to blocks/,
+    );
+    expect(handles[0].close).not.toHaveBeenCalled();
+    // Session survives — a follow-up call works.
+    await expect(exec.getCurrentCode(session_id)).resolves.toBeDefined();
+  });
+});
+
 describe("TabExecutor — dispose", () => {
   it("dispose closes every open session tab and the pool", async () => {
     const { pool, handles } = makePool();

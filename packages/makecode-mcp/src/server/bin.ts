@@ -23,6 +23,18 @@ async function main() {
         executablePath,
         defaultViewport: null,
         protocolTimeout: 300_000,
+        // Keep idle tabs alive. The server holds pages open for its whole
+        // lifetime, but Chrome throttles/discards background tabs ("Memory
+        // Saver"), which detaches the frame so the next page.evaluate throws
+        // "Attempted to use detached Frame". These flags stop that auto-discard;
+        // the tab-pool / executor recovery handles whatever still slips through
+        // (renderer crash, user closing a headed window).
+        args: [
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-features=CalculateNativeWinOcclusion",
+        ],
       }),
     );
   const renderPool = new BrowserPool(launch(true));

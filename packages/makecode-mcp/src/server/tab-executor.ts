@@ -13,9 +13,14 @@ import {
   writeCode,
 } from "../shared/executor-ops.js";
 import { createLogger } from "../shared/logger.js";
+import type { MakeCodeDriver } from "../browser/driver-port.js";
+import { isDeadPageError } from "./page-errors.js";
 import type { TabHandle, TabPool } from "./tab-pool.js";
 
 const log = createLogger("tab-executor");
+/** Shown for any gone session, whether idle-reaped or its tab died (Chrome
+ *  discarded it, or the user closed the window in headed mode). */
+const SESSION_GONE_MSG = `session_id is no longer available. The editor window was closed or the session timed out. Call ${TOOL.SESSION_START} to get a new one.`;
 const toBase64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -102,15 +107,23 @@ export class TabExecutor implements ServerExecutor {
     const cutoff = this.now() - this.idleTimeoutMs;
     for (const [id, entry] of this.sessions) {
       if (entry.lastUsedAt < cutoff) {
-        this.sessions.delete(id);
-        entry.tab.close().catch(() => {});
-        this.markExpired(id);
+        this.expireSession(id, entry);
         log.info("reapIdleSessions → closed idle session", {
           session_id: id,
           idleMs: this.now() - entry.lastUsedAt,
         });
       }
     }
+  }
+
+  /** Drop a session and remember it as expired: remove it from the map, close
+   *  its tab in the background, and record the id so later use reports
+   *  `expired` rather than `unknown`. Shared by the idle reaper and dead-tab
+   *  recovery. */
+  private expireSession(id: string, entry: SessionEntry): void {
+    this.sessions.delete(id);
+    entry.tab.close().catch(() => {});
+    this.markExpired(id);
   }
 
   private markExpired(sessionId: string): void {
@@ -123,24 +136,55 @@ export class TabExecutor implements ServerExecutor {
   }
 
   async getCurrentCode(sessionId: string): Promise<string> {
-    const { driver } = this.requireSession(sessionId);
-    return readCurrentCode(driver);
+    return this.runSession(sessionId, (driver) => readCurrentCode(driver));
   }
 
   async setCode(sessionId: string, code: string): Promise<void> {
-    const { driver } = this.requireSession(sessionId);
-    await writeCode(driver, code);
+    await this.runSession(sessionId, (driver) => writeCode(driver, code));
   }
 
   async getBlocksImage(sessionId: string): Promise<BlocksImage> {
-    const { driver } = this.requireSession(sessionId);
-    return renderCurrentBlocks(driver);
+    return this.runSession(sessionId, (driver) => renderCurrentBlocks(driver));
   }
 
   async getHexFile(sessionId: string): Promise<string> {
+    return this.runSession(sessionId, async (driver) => {
+      const { hex } = await driver.compile();
+      return toBase64(hex);
+    });
+  }
+
+  /**
+   * Resolve the session, run `fn` against its driver, and translate a dead-page
+   * failure (tab discarded by Chrome, or window closed by the user in headed
+   * mode) into a clean `SessionError("expired")`. Dropping the dead session lets
+   * the model start a fresh one instead of seeing a raw Puppeteer
+   * "detached Frame" string. Other errors propagate unchanged so the model can
+   * still self-correct on e.g. uncompilable TS.
+   */
+  private async runSession<T>(
+    sessionId: string,
+    fn: (driver: MakeCodeDriver) => Promise<T>,
+  ): Promise<T> {
     const { driver } = this.requireSession(sessionId);
-    const { hex } = await driver.compile();
-    return toBase64(hex);
+    try {
+      return await fn(driver);
+    } catch (err) {
+      if (isDeadPageError(err)) throw this.dropDeadSession(sessionId, err);
+      throw err;
+    }
+  }
+
+  private dropDeadSession(sessionId: string, err: unknown): SessionError {
+    const entry = this.sessions.get(sessionId);
+    if (entry) {
+      this.expireSession(sessionId, entry);
+      log.warn("session tab died, closing and expiring", {
+        session_id: sessionId,
+        error: String(err),
+      });
+    }
+    return new SessionError("expired", SESSION_GONE_MSG);
   }
 
   async getBlocksImageFromCode(code: string): Promise<BlocksImage> {
@@ -185,10 +229,7 @@ export class TabExecutor implements ServerExecutor {
       );
     }
     if (this.expiredIds.has(sessionId)) {
-      throw new SessionError(
-        "expired",
-        `session_id has expired due to inactivity. Call ${TOOL.SESSION_START} to get a new one.`,
-      );
+      throw new SessionError("expired", SESSION_GONE_MSG);
     }
     const entry = this.sessions.get(sessionId);
     if (!entry) {

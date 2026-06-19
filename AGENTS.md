@@ -18,6 +18,8 @@ Every new piece of production code lands with a test authored *before* the imple
 
 When a change alters observable behaviour or a documented contract, update the matching tests *and* this file in the same commit. A test that now passes for the wrong reason gets fixed, not left. Changing the system prompt → update `packages/app/test/system-prompt.test.ts`. Skip doc/test updates only for genuinely invisible changes (local rename, comment cleanup). If you find yourself silencing a log to pass a test, fix the test — the logger is already test-silent.
 
+Before calling a change done, run the affected package's `npm test` and confirm the whole suite is green, not just the new test.
+
 ### Verbose logging is part of the contract
 This is a teaching/research POC; a live trace is how the developer and student observers debug it. Logging is on by default and must stay that way.
 
@@ -75,6 +77,8 @@ Wraps `@microbit/makecode-embed/react`. Must: accept `onExecutorReady(executor: 
 
 `PuppeteerTabPool` consumes **two** pools: a **render pool** (always headless, hosts the persistent stateless tab shared by both `*_from_code` tools) and a **session pool** (headless or headed per `--headed` / `MKCP_HEADED=1`, one tab per `session_start`). Headed sessions each open in their own OS window via CDP `Target.createTarget({ newWindow: true })`; the shell URL carries `session=<id>&label=<encoded>` so the shim sets `document.title` (Chromium uses it as the window title).
 
+A long-lived cached page can outlive its frame (Chrome discards an idle tab, a renderer recycles, the user closes a headed window), after which `page.evaluate` throws `Attempted to use detached Frame`. Two things to preserve: the Chrome launch flags in `bin.ts` are load-bearing (they suppress the auto-discard, so don't drop them when tidying `puppeteer.launch`), and new tool ops must route through `runSession` (session) or `withStatelessTab` (stateless) so they inherit the dead-page recovery there, rather than calling a driver directly.
+
 ### Server layering
 ```
 bin.ts (CLI, parses --headed / MKCP_HEADED)
@@ -87,7 +91,7 @@ bin.ts (CLI, parses --headed / MKCP_HEADED)
                           ├── PuppeteerDriver  ← src/server/puppeteer-driver.ts
                           └── startShellServer() ← serves dist/shell/{shim.js, shell.html}
 ```
-`TabExecutor` owns session lifecycle, generates the `session_id`, forwards `{ sessionId, label }` to `TabPool.openTab`, and delegates per-session ops to a `MakeCodeDriver` from a `TabHandle`. `TabPool` is the seam that keeps `TabExecutor` testable without Puppeteer (`PuppeteerTabPool` is the only impl). It also runs an **idle-session reaper** (default 30 min timeout, 1 min interval): each successful per-session call refreshes `lastUsedAt`; the reaper closes stale sessions and remembers up to 256 recent expirations so reuse raises `SessionError("expired")` (precise) rather than `"unknown"`. Override via `new TabExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })`; `idleTimeoutMs: 0` disables it.
+`TabExecutor` owns session lifecycle, generates the `session_id`, forwards `{ sessionId, label }` to `TabPool.openTab`, and delegates per-session ops to a `MakeCodeDriver` from a `TabHandle`. `TabPool` is the seam that keeps `TabExecutor` testable without Puppeteer (`PuppeteerTabPool` is the only impl). It also runs an **idle-session reaper** (default 30 min timeout, 1 min interval): each successful per-session call refreshes `lastUsedAt`; the reaper closes stale sessions and remembers up to 256 recent expirations so reuse raises `SessionError("expired")` (precise) rather than `"unknown"`. Override via `new TabExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })`; `idleTimeoutMs: 0` disables it. `expired` also covers a session whose tab died mid-use (`runSession` catches `isDeadPageError` and drops the session the same way), so the code now means "gone, start a new one" generally, not just "idle-timed-out".
 
 `PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Don't add more IPC surface (e.g. `page.exposeFunction`) unless a tool genuinely can't be one evaluate call.
 
