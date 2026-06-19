@@ -71,8 +71,12 @@
           var img = document.createElement("img");
           img.alt = "MakeCode blocks rendered from TypeScript";
           img.src = "data:" + (mimeType || "image/png") + ";base64," + b64;
-          // Intrinsic dimensions are unknown until decode — re-measure then.
-          img.onload = reportSize;
+          img.onload = function () {
+            // PNG is rastered at 2× (shim renderBlocksImage scale): display at
+            // half its pixel width so it's logical-sized and crisp on HiDPI.
+            img.style.width = Math.round(img.naturalWidth / 2) + "px";
+            reportSize();
+          };
           viewer.appendChild(img);
         }
 

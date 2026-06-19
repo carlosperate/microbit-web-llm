@@ -31,14 +31,12 @@ First model load in the app downloads several GB (depending on the picker select
 ## Common scripts
 
 ```bash
-npm run build --workspaces          # build every package
-npm run test --workspaces           # unit tests (Vitest)
-npm run test:e2e                    # Playwright end-to-end tests
-npm run dev -w app                  # run the web app
-npm run dev:test-mcp -w makecode-mcp # build + launch MCP Inspector against the stdio server
+npm run build --workspaces           # Build every package
+npm run test --workspaces            # Unit tests
+npm run test:e2e                     # Playwright end-to-end tests
+npm run dev -w app                   # Run the web app
+npm run dev:test-mcp -w makecode-mcp # Build + launch MCP Inspector against the stdio server
 ```
-
-Package manager is **npm workspaces**; do not use pnpm or yarn. TypeScript project references span the packages, so run `npm run build --workspaces` after changes in `makecode-mcp` before running `app`.
 
 ## How the pieces fit
 

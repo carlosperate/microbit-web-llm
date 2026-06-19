@@ -116,8 +116,8 @@ window.__mkcp = {
   renderBlocksImage: (code) =>
     asResult(async () => {
       const adapter = await ensureAdapter();
-      // scale=1 (vs the browser-target default of 2) — the MCP transport
-      // sends the PNG as base64 to the LLM, where 2× retina is wasted bytes.
-      return adapter.renderBlocksImage(code, 1);
+      // scale=2: high-res source so HiDPI stays crisp. The widget pins display
+      // width to half this (logical size); raw-PNG hosts show it column-width.
+      return adapter.renderBlocksImage(code, 2);
     }),
 };
