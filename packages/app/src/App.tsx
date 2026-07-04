@@ -35,7 +35,7 @@ function buildCssVars(settings: ChatSettings): React.CSSProperties {
 }
 
 /** Hosts its own runtime so remounting this component (via `key`) gives a
- *  fresh, empty thread — used to reset the conversation when the model
+ *  fresh, empty thread, used to reset the conversation when the model
  *  changes without touching the MakeCode iframe. */
 function ChatThread({
   adapter,

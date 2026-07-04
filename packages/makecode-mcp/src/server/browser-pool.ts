@@ -7,6 +7,12 @@ export interface PageLike {
   goto(url: string, options?: unknown): Promise<unknown>;
   evaluate(fn: unknown, ...args: unknown[]): Promise<unknown>;
   url?(): string;
+  /**
+   * MakeCode TS compile diagnostics seen on this page within the last
+   * `withinMs`, or `[]` if none. Optional: only the real Puppeteer page
+   * provides it; test doubles and browser-shaped pages omit it.
+   */
+  recentDiagnostics?(withinMs: number): string[];
 }
 
 export interface BrowserLike {

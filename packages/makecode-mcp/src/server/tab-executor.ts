@@ -23,6 +23,15 @@ const log = createLogger("tab-executor");
 const SESSION_GONE_MSG = `session_id is no longer available. The editor window was closed or the session timed out. Call ${TOOL.SESSION_START} to get a new one.`;
 const toBase64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
+/** The shared adapter's decompile hint says to call session_set_code, but on
+ *  the stateless path there is no session; retry the calling tool instead. */
+function retargetCompileHint(err: unknown, toolName: string): unknown {
+  if (err instanceof Error && /failed to compile to blocks/i.test(err.message)) {
+    return new Error(err.message.replaceAll(TOOL.SESSION_SET_CODE, toolName));
+  }
+  return err;
+}
+
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_REAP_INTERVAL_MS = 60_000;
 /** Bound the expired-id history; once full, the oldest entries fall out and
@@ -193,7 +202,11 @@ export class TabExecutor implements ServerExecutor {
       // editor's decompile-confirm-wait detects TS that doesn't compile and
       // throws. Valid TS that can't decompile to blocks passes (the editor
       // still emits a post-switchBlocks workspacesave for it).
-      await writeCode(d, code);
+      try {
+        await writeCode(d, code);
+      } catch (err) {
+        throw retargetCompileHint(err, TOOL.GET_BLOCKS_IMG_FROM_CODE);
+      }
       // renderCurrentBlocks reads main.ts back and pipes it through the same
       // standalone renderer the session path uses, so the grey "raw text"
       // block falls out automatically for valid-but-undecompilable code.
@@ -203,7 +216,11 @@ export class TabExecutor implements ServerExecutor {
 
   async getHexFileFromCode(code: string): Promise<string> {
     return this.pool.withStatelessTab(async (d) => {
-      await writeCode(d, code);
+      try {
+        await writeCode(d, code);
+      } catch (err) {
+        throw retargetCompileHint(err, TOOL.GET_HEX_FILE_FROM_CODE);
+      }
       const { hex } = await d.compile();
       return toBase64(hex);
     });

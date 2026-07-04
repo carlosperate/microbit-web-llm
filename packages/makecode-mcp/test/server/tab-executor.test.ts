@@ -231,6 +231,70 @@ describe("TabExecutor — stateless _from_code tools", () => {
   });
 });
 
+describe("TabExecutor — stateless compile-failure hint", () => {
+  // What PuppeteerDriver produces: the shared adapter's hint (which names
+  // session_set_code, the only write tool it knows) plus appended diagnostics.
+  const COMPILE_FAIL_MSG =
+    "Code was loaded into the editor but failed to compile to blocks. Fix the TypeScript and call session_set_code again." +
+    "\n\nCompiler errors:\nmain.ts(2,23): error TS2552: Cannot find name 'button'. Did you mean 'Button'?";
+
+  // Pool whose stateless tab uses a caller-supplied driver, so tests can
+  // program setProject failures before the executor call creates one.
+  function makePoolWith(statelessDriver: DriverMocks): TabPool {
+    return {
+      openTab: vi.fn(async (): Promise<TabHandle> => ({
+        driver: makeDriver(),
+        close: vi.fn(async () => {}),
+      })),
+      withStatelessTab: vi.fn(
+        async <T>(fn: (d: MakeCodeDriver) => Promise<T>) => fn(statelessDriver),
+      ),
+      dispose: vi.fn(async () => {}),
+    };
+  }
+
+  it("getBlocksImageFromCode retargets the hint to its own tool name, keeping diagnostics", async () => {
+    // There is no session on this path; telling the model to call
+    // session_set_code would send it into a missing-session error instead
+    // of just retrying this tool with fixed code.
+    const d = makeDriver();
+    d.setProject.mockRejectedValueOnce(new Error(COMPILE_FAIL_MSG));
+    const exec = new TabExecutor(makePoolWith(d));
+    const err = await exec
+      .getBlocksImageFromCode("basic.showString(button)")
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toContain("call get_blocks_img_from_code again");
+    expect(err!.message).not.toContain("session_set_code");
+    expect(err!.message).toContain(
+      "Compiler errors:\nmain.ts(2,23): error TS2552",
+    );
+    expect(d.renderBlocksImage).not.toHaveBeenCalled();
+  });
+
+  it("getHexFileFromCode retargets the hint to its own tool name", async () => {
+    const d = makeDriver();
+    d.setProject.mockRejectedValueOnce(new Error(COMPILE_FAIL_MSG));
+    const exec = new TabExecutor(makePoolWith(d));
+    const err = await exec
+      .getHexFileFromCode("basic.showString(button)")
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toContain("call get_hex_file_from_code again");
+    expect(err!.message).not.toContain("session_set_code");
+    expect(d.compile).not.toHaveBeenCalled();
+  });
+
+  it("non-compile errors from the stateless write propagate unchanged", async () => {
+    const d = makeDriver();
+    d.setProject.mockRejectedValueOnce(new Error("net::ERR_CONNECTION_RESET"));
+    const exec = new TabExecutor(makePoolWith(d));
+    await expect(exec.getBlocksImageFromCode("x")).rejects.toThrow(
+      "net::ERR_CONNECTION_RESET",
+    );
+  });
+});
+
 describe("TabExecutor — dead session tab", () => {
   it("converts a detached-frame error during a session op into SessionError(expired) and closes the tab", async () => {
     // Headed mode: the user can close the editor window at any time; or Chrome

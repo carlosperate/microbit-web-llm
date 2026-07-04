@@ -16,7 +16,7 @@ export function estimateTokensFromChars(chars: number): number {
 }
 
 // Image/hex tool results are stubbed in flattenToolHistory (webllm-engine.ts)
-// before the model ever sees them — count the stub, not the literal bytes.
+// before the model ever sees them, count the stub, not the literal bytes.
 function toolCallChars(toolName: string, argsText: string, result: unknown): number {
   let n = argsText.length;
   if (result === undefined) return n;

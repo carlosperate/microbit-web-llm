@@ -13,6 +13,12 @@ function unwrap<T>(result: ShimResult<T>): T {
   throw new Error(result.error);
 }
 
+// How far back to look for console diagnostics when setProject fails. They fire
+// during the decompile attempt, just before the in-page confirm timeout rejects,
+// so a few seconds comfortably covers the gap without risking errors from an
+// earlier program.
+const DIAGNOSTICS_WINDOW_MS = 5_000;
+
 export class PuppeteerDriver implements MakeCodeDriver {
   constructor(private readonly page: PageLike) {}
 
@@ -25,17 +31,32 @@ export class PuppeteerDriver implements MakeCodeDriver {
   }
 
   async setProject(project: MakeCodeProjectFiles): Promise<void> {
-    unwrap(
-      (await this.page.evaluate(
-        (text: unknown) =>
-          (
-            window as unknown as {
-              __mkcp: { importProject(t: unknown): Promise<unknown> };
-            }
-          ).__mkcp.importProject(text),
-        project.text,
-      )) as ShimResult<void>,
-    );
+    const result = (await this.page.evaluate(
+      (text: unknown) =>
+        (
+          window as unknown as {
+            __mkcp: { importProject(t: unknown): Promise<unknown> };
+          }
+        ).__mkcp.importProject(text),
+      project.text,
+    )) as ShimResult<void>;
+    if (result.ok) return;
+    throw this.compileError(result.error);
+  }
+
+  // The in-page adapter can only report a generic "failed to compile to blocks"
+  // (it can't read the cross-origin editor console). On the Node side we can:
+  // attach the real TS diagnostics captured from the page console so the model
+  // gets line/column messages to fix. Only enrich genuine compile failures;
+  // transport errors must not get stale diagnostics stapled on.
+  private compileError(message: string): Error {
+    if (/failed to compile to blocks/i.test(message)) {
+      const diagnostics = this.page.recentDiagnostics?.(DIAGNOSTICS_WINDOW_MS) ?? [];
+      if (diagnostics.length > 0) {
+        return new Error(`${message}\n\nCompiler errors:\n${diagnostics.join("\n")}`);
+      }
+    }
+    return new Error(message);
   }
 
   async compile(): Promise<{ name: string; hex: string }> {

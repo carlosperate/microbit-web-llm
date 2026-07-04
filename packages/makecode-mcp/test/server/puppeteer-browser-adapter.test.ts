@@ -51,6 +51,38 @@ describe("adaptPuppeteerBrowser → openWindow", () => {
     );
   });
 
+  it("instruments newPage so console TS diagnostics surface via recentDiagnostics", async () => {
+    let consoleListener: ((msg: { text(): string }) => void) | undefined;
+    const rawPage = {
+      ...makePage(),
+      on: vi.fn((event: string, cb: (msg: { text(): string }) => void) => {
+        if (event === "console") consoleListener = cb;
+      }),
+    };
+    const browser = {
+      isConnected: () => true,
+      close: vi.fn(async () => {}),
+      newPage: vi.fn(async () => rawPage),
+      pages: vi.fn(async () => [rawPage]),
+      target: () => ({ createCDPSession: async () => ({ send: async () => ({}), detach: async () => {} }) }),
+    };
+    const adapted = adaptPuppeteerBrowser(browser as never);
+    const page = await adapted.newPage();
+
+    // Identity preserved — the raw page IS the PageLike, just instrumented.
+    expect(page).toBe(rawPage);
+    expect(page.recentDiagnostics).toBeTypeOf("function");
+    expect(page.recentDiagnostics!(5000)).toEqual([]);
+
+    // Feed it a real MakeCode console error.
+    consoleListener?.({
+      text: () => "error: main.ts(5,1): error TS2304: Cannot find name 'accelermeter'.\n",
+    });
+    expect(page.recentDiagnostics!(5000)).toEqual([
+      "main.ts(5,1): error TS2304: Cannot find name 'accelermeter'.",
+    ]);
+  });
+
   it("forwards onDisconnected listeners to the underlying browser's 'disconnected' event", () => {
     const listeners: Array<{ event: string; cb: () => void }> = [];
     const browser = {
