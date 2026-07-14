@@ -1,7 +1,9 @@
 import { createMakeCodeRenderBlocks } from "@microbit/makecode-embed/vanilla";
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "./driver-port.js";
+import { compileRejectedError } from "../shared/compile-errors.js";
 import { svgToPngBase64 } from "../shared/svg-to-png.js";
 import { TOOL } from "../shared/tools.js";
+import { localCompiler } from "./local-compiler.js";
 
 interface WorkspaceSaveEventLike {
   project: {
@@ -55,6 +57,21 @@ interface FrameDriverLike {
   switchBlocks(): Promise<void>;
 }
 
+type LocalDiagnostics = (
+  code: string,
+  dependencies?: Record<string, string>,
+) => Promise<string[]>;
+
+function dependenciesOf(pxtJson: string | undefined): Record<string, string> | undefined {
+  if (!pxtJson) return undefined;
+  try {
+    const deps = (JSON.parse(pxtJson) as { dependencies?: unknown }).dependencies;
+    return deps && typeof deps === "object" ? (deps as Record<string, string>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   private latestHeader: unknown;
   private pendingSaveCallbacks: Array<(p: MakeCodeProjectFiles) => void> = [];
@@ -62,7 +79,11 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   private compileInFlight = false;
   private renderer: ReturnType<typeof createMakeCodeRenderBlocks> | null = null;
 
-  constructor(private readonly driver: FrameDriverLike) {}
+  constructor(
+    private readonly driver: FrameDriverLike,
+    private readonly localDiagnostics: LocalDiagnostics = (code, deps) =>
+      localCompiler.getDiagnostics(code, deps),
+  ) {}
 
   private getRenderer() {
     if (!this.renderer) {
@@ -107,6 +128,20 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   }
 
   async setProject(project: MakeCodeProjectFiles): Promise<void> {
+    // Reject uncompilable code before it reaches the editor: switching it to
+    // blocks would pop MakeCode's blocking convert-failure modal, which can't
+    // be dismissed cross-origin. Fail-open: no compiler → load-and-see.
+    const code = project.text["main.ts"] ?? "";
+    const emptyProgram = code.trim().length === 0;
+    if (!emptyProgram) {
+      const errors = await this.localDiagnostics(
+        code,
+        dependenciesOf(project.text["pxt.json"]),
+      ).catch(() => [] as string[]);
+      if (errors.length > 0) {
+        throw new Error(compileRejectedError(TOOL.SESSION_SET_CODE, errors));
+      }
+    }
     await this.driver.importProject({
       project: {
         ...(this.latestHeader ? { header: this.latestHeader } : {}),
@@ -132,8 +167,7 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
     // on a healthy decompile, MakeCode keeps the save flow going; on failure,
     // no further saves arrive at all. Empty programs never trigger a follow-up
     // save and we don't want to false-positive on the initial blank import.
-    const ts = project.text["main.ts"] ?? "";
-    if (ts.trim().length === 0) return;
+    if (emptyProgram) return;
     const decompileConfirmed = await this.awaitNextSaveOrTimeout(
       DECOMPILE_CONFIRM_TIMEOUT_MS,
     );

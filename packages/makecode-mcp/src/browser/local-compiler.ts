@@ -22,7 +22,10 @@ const log = createLogger("local-compiler");
 const MAKECODE_WEBSITE = "https://makecode.microbit.org/";
 
 export interface CompilerEngine {
-  compile(code: string): Promise<{ success: boolean; diagnostics: CompilerDiagnostic[] }>;
+  compile(
+    code: string,
+    dependencies?: Record<string, string>,
+  ): Promise<{ success: boolean; diagnostics: CompilerDiagnostic[] }>;
 }
 
 /** Route mkc's internal console.log lines ("Download https://...", "GET ...")
@@ -68,10 +71,12 @@ async function createMkcEngine(): Promise<CompilerEngine> {
     createLanguageService: (editor) => new BrowserLanguageService(editor),
   });
   setHost(host);
-  seedFile(
-    "prj/pxt.json",
-    JSON.stringify({ name: "mkcp-local-diagnostics", files: ["main.ts"], dependencies: { core: "*" } }),
-  );
+  const seedPxtJson = (dependencies: Record<string, string>) =>
+    seedFile(
+      "prj/pxt.json",
+      JSON.stringify({ name: "mkcp-local-diagnostics", files: ["main.ts"], dependencies }),
+    );
+  seedPxtJson({ core: "*" });
   seedFile("prj/mkc.json", JSON.stringify({ targetWebsite: MAKECODE_WEBSITE }));
   seedFile("prj/main.ts", "");
 
@@ -95,7 +100,11 @@ async function createMkcEngine(): Promise<CompilerEngine> {
   });
 
   return {
-    compile: async (code) => {
+    compile: async (code, dependencies = { core: "*" }) => {
+      // Compile against the editor project's dependencies so extension APIs
+      // don't false-fail; mkc resolves bundled packages locally and GitHub
+      // extensions via the MakeCode cloud.
+      seedPxtJson(dependencies);
       seedFile("prj/main.ts", code);
       // Non-native build: typecheck + JS emit only, no C++ hex downloads.
       const res = await project.buildAsync({});
@@ -117,14 +126,14 @@ export class LocalCompiler {
   }
 
   /** Error lines in the shared `main.ts(L,C): error TS####: msg` format.
-   *  Never throws: on any internal failure it returns [] so enrichment
-   *  degrades to the original error instead of replacing it. */
-  getDiagnostics(code: string): Promise<string[]> {
+   *  Never throws: on any internal failure it returns [] so validation
+   *  degrades to the old load-and-see behaviour instead of blocking. */
+  getDiagnostics(code: string, dependencies?: Record<string, string>): Promise<string[]> {
     const run = this.chain.then(async () => {
       log.group("local compile (pxt-mkc)", true);
       try {
         const engine = await this.ensureEngine();
-        const { success, diagnostics } = await engine.compile(code);
+        const { success, diagnostics } = await engine.compile(code, dependencies);
         // Errors only (pxt DiagnosticCategory.Error === 1); warnings would be noise.
         const lines = diagnostics
           .filter((d) => (d.category ?? 1) === 1)

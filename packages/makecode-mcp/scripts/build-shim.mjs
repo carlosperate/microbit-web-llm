@@ -31,6 +31,8 @@ await build({
   platform: "browser",
   sourcemap: "inline",
   logLevel: "info",
+  // The adapter's pre-validation pulls in pxt-mkc, which requires "path".
+  alias: { path: "path-browserify" },
 });
 
 copyFileSync(join(srcShell, "shell.html"), join(distShell, "shell.html"));

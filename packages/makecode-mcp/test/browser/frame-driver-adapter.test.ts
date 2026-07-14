@@ -84,7 +84,9 @@ describe("MakeCodeFrameDriverAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     driver = makeDriverStub();
-    adapter = new MakeCodeFrameDriverAdapter(driver);
+    // Pre-validation passes (no local diagnostics) so these tests exercise
+    // the import/switch/confirm flow. Pre-validation itself is covered below.
+    adapter = new MakeCodeFrameDriverAdapter(driver, async () => []);
     autoConfirmDecompile();
   });
 
@@ -327,5 +329,74 @@ describe("MakeCodeFrameDriverAdapter", () => {
     // Resolve the first.
     adapter.handleDownload({ name: "microbit", hex: ":00000001FF\n" });
     await expect(first).resolves.toMatchObject({ hex: ":00000001FF\n" });
+  });
+});
+
+// setProject pre-validates with the local compiler before importing. Rejected
+// code never reaches the editor: this is what prevents MakeCode's blocking
+// "problem converting your code" modal (cross-origin, we can't dismiss it).
+describe("MakeCodeFrameDriverAdapter — setProject pre-validation", () => {
+  let driver: ReturnType<typeof makeDriverStub>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    driver = makeDriverStub();
+  });
+
+  it("rejects uncompilable code without touching the editor", async () => {
+    const localDiagnostics = vi.fn(async () => [
+      "main.ts(5,1): error TS2304: Cannot find name 'accelermeter'.",
+    ]);
+    const adapter = new MakeCodeFrameDriverAdapter(driver, localDiagnostics);
+    await expect(
+      adapter.setProject({ text: { ...FILES, "main.ts": "accelermeter.x()" } }),
+    ).rejects.toThrow(/was not loaded.*Compiler errors:/s);
+    expect(driver.importProject).not.toHaveBeenCalled();
+    expect(driver.switchBlocks).not.toHaveBeenCalled();
+  });
+
+  it("passes the project's pxt.json dependencies to the compiler", async () => {
+    const localDiagnostics = vi.fn(async () => []);
+    const adapter = new MakeCodeFrameDriverAdapter(driver, localDiagnostics);
+    const text = {
+      ...FILES,
+      "pxt.json": JSON.stringify({ dependencies: { core: "*", radio: "*" } }),
+    };
+    await adapter.setProject({ text }).catch(() => {});
+    expect(localDiagnostics).toHaveBeenCalledWith(FILES["main.ts"], {
+      core: "*",
+      radio: "*",
+    });
+  });
+
+  it("fails open: a broken diagnostics provider falls back to load-and-see", async () => {
+    const adapter = new MakeCodeFrameDriverAdapter(driver, async () => {
+      throw new Error("compiler offline");
+    });
+    // switchBlocks rejection path still works as before.
+    driver.switchBlocks.mockRejectedValueOnce(new Error("Cannot convert to blocks"));
+    await expect(
+      adapter.setProject({ text: { ...FILES, "main.ts": "broken();" } }),
+    ).rejects.toThrow(/failed to compile to blocks/i);
+    expect(driver.importProject).toHaveBeenCalledOnce();
+  });
+
+  it("skips validation for empty main.ts (blank bootstrap import)", async () => {
+    const localDiagnostics = vi.fn(async () => ["should not be consulted"]);
+    const adapter = new MakeCodeFrameDriverAdapter(driver, localDiagnostics);
+    await adapter.setProject({ text: { ...FILES, "main.ts": "  " } });
+    expect(localDiagnostics).not.toHaveBeenCalled();
+    expect(driver.importProject).toHaveBeenCalledOnce();
+  });
+
+  it("tolerates malformed pxt.json (validates without dependencies)", async () => {
+    const localDiagnostics = vi.fn(async () => [
+      "main.ts(1,1): error TS2304: Cannot find name 'x'.",
+    ]);
+    const adapter = new MakeCodeFrameDriverAdapter(driver, localDiagnostics);
+    await expect(
+      adapter.setProject({ text: { ...FILES, "pxt.json": "not json" } }),
+    ).rejects.toThrow(/was not loaded/);
+    expect(localDiagnostics).toHaveBeenCalledWith(FILES["main.ts"], undefined);
   });
 });

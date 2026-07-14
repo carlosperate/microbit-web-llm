@@ -272,6 +272,24 @@ describe("TabExecutor — stateless compile-failure hint", () => {
     expect(d.renderBlocksImage).not.toHaveBeenCalled();
   });
 
+  it("getBlocksImageFromCode also retargets the pre-validation rejection message", async () => {
+    // The shim adapter now rejects uncompilable code before importing; that
+    // message names session_set_code too and must be retargeted the same way.
+    const d = makeDriver();
+    d.setProject.mockRejectedValueOnce(
+      new Error(
+        "The code was not loaded because it does not compile. The editor still contains the previous code. Fix the TypeScript and call session_set_code again.\n\nCompiler errors:\nmain.ts(1,1): error TS2304: Cannot find name 'x'.",
+      ),
+    );
+    const exec = new TabExecutor(makePoolWith(d));
+    const err = await exec
+      .getBlocksImageFromCode("x")
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err!.message).toContain("call get_blocks_img_from_code again");
+    expect(err!.message).not.toContain("session_set_code");
+    expect(err!.message).toContain("Compiler errors:");
+  });
+
   it("getHexFileFromCode retargets the hint to its own tool name", async () => {
     const d = makeDriver();
     d.setProject.mockRejectedValueOnce(new Error(COMPILE_FAIL_MSG));

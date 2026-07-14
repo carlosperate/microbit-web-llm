@@ -91,18 +91,26 @@ test.describe("MakeCodePanel integration", () => {
     await expect(page.getByText(/session_get_code →.*STATE_A/)).toBeVisible({ timeout: 10_000 });
   });
 
-  test("session_set_code surfaces decompile failure guidance for invalid TypeScript", async ({ page }) => {
+  test("session_set_code rejects invalid TypeScript before it reaches the editor", async ({ page }) => {
     await page.locator("textarea").fill('basic.showString("oops"');
     await clickButton(page, "session_set_code");
 
-    // 30 s: the error only surfaces after the local compiler enriches it,
-    // which on a cold cache includes the ~4.6 MB pxt-mkc editor download.
-    await expect(page.getByText(/failed to compile to blocks/i)).toBeVisible({ timeout: 30_000 });
+    // 30 s: the rejection comes from the local compiler, which on a cold
+    // cache includes the ~4.6 MB pxt-mkc editor download.
+    await expect(page.getByText(/was not loaded because it does not compile/i)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Fix the TypeScript and call session_set_code again/i)).toBeVisible({ timeout: 10_000 });
     // Local pxt-mkc diagnostics appended to the same error (would be absent
     // if the compiler failed open, e.g. missing "path" alias in vite config).
     await expect(page.getByText(/Compiler errors:/)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText(/main\.ts\(\d+,\d+\): error TS\d+/)).toBeVisible({ timeout: 10_000 });
+
+    // The whole point of rejecting pre-import: MakeCode never shows its
+    // blocking "problem converting your code" modal (which we can't dismiss
+    // from outside the cross-origin iframe and which survives later imports).
+    const editorFrame = page.frameLocator('iframe[src*="makecode.microbit.org"]');
+    await expect(
+      editorFrame.getByText(/problem converting your code/i),
+    ).not.toBeVisible();
   });
 
 });

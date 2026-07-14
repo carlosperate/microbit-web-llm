@@ -23,10 +23,11 @@ const log = createLogger("tab-executor");
 const SESSION_GONE_MSG = `session_id is no longer available. The editor window was closed or the session timed out. Call ${TOOL.SESSION_START} to get a new one.`;
 const toBase64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
-/** The shared adapter's decompile hint says to call session_set_code, but on
- *  the stateless path there is no session; retry the calling tool instead. */
+/** The shared adapter's compile errors (pre-validation rejection or decompile
+ *  hint) say to call session_set_code, but on the stateless path there is no
+ *  session; retry the calling tool instead. */
 function retargetCompileHint(err: unknown, toolName: string): unknown {
-  if (err instanceof Error && /failed to compile to blocks/i.test(err.message)) {
+  if (err instanceof Error && err.message.includes(TOOL.SESSION_SET_CODE)) {
     return new Error(err.message.replaceAll(TOOL.SESSION_SET_CODE, toolName));
   }
   return err;

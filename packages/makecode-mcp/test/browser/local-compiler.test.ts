@@ -64,6 +64,18 @@ describe("LocalCompiler.getDiagnostics", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards the project's dependencies to the engine", async () => {
+    const engine: CompilerEngine = {
+      compile: vi.fn(async () => ({ success: true, diagnostics: [] })),
+    };
+    const compiler = new LocalCompiler(async () => engine);
+    await compiler.getDiagnostics("x", { core: "*", neopixel: "github:microsoft/pxt-neopixel" });
+    expect(engine.compile).toHaveBeenCalledWith("x", {
+      core: "*",
+      neopixel: "github:microsoft/pxt-neopixel",
+    });
+  });
+
   it("fails open when a compile throws", async () => {
     const compiler = new LocalCompiler(async () => ({
       compile: async () => {

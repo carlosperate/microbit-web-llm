@@ -32,6 +32,16 @@ export function appendCompilerErrors(message: string, lines: string[]): string {
   return `${message}\n\nCompiler errors:\n${lines.join("\n")}`;
 }
 
+/** Pre-validation rejection: the code never reached the editor (prevents
+ *  MakeCode's blocking convert modal). Worded to not match
+ *  COMPILE_TO_BLOCKS_RE so the server's console scrape doesn't re-enrich. */
+export function compileRejectedError(toolName: string, lines: string[]): string {
+  return appendCompilerErrors(
+    `The code was not loaded because it does not compile. The editor still contains the previous code. Fix the TypeScript and call ${toolName} again.`,
+    lines,
+  );
+}
+
 /** `main.ts(L,C): error TS####: message` with chained messages indented on
  *  continuation lines (mirrors mkc's own CLI formatting). */
 export function formatCompilerDiagnostic(d: CompilerDiagnostic): string {

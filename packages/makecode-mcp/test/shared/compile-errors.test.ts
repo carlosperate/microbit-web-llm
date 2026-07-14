@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   COMPILE_TO_BLOCKS_RE,
   appendCompilerErrors,
+  compileRejectedError,
   formatCompilerDiagnostic,
   type CompilerDiagnostic,
 } from "../../src/shared/compile-errors.ts";
@@ -38,6 +39,25 @@ describe("appendCompilerErrors", () => {
 
   it("returns the message unchanged when there are no lines", () => {
     expect(appendCompilerErrors("msg", [])).toBe("msg");
+  });
+});
+
+describe("compileRejectedError", () => {
+  it("says the code was rejected, keeps the editor claim honest, and appends errors", () => {
+    const msg = compileRejectedError("session_set_code", [
+      "main.ts(1,1): error TS2304: Cannot find name 'x'.",
+    ]);
+    expect(msg).toContain("was not loaded");
+    expect(msg).toContain("editor still contains the previous code");
+    expect(msg).toContain("call session_set_code again");
+    expect(msg).toContain(
+      "Compiler errors:\nmain.ts(1,1): error TS2304: Cannot find name 'x'.",
+    );
+  });
+
+  it("does not match the decompile-failure gate (server scrape must not re-enrich)", () => {
+    const msg = compileRejectedError("session_set_code", ["line"]);
+    expect(COMPILE_TO_BLOCKS_RE.test(msg)).toBe(false);
   });
 });
 

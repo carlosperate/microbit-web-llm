@@ -9,8 +9,11 @@ import { writeCode } from "../../src/shared/executor-ops.ts";
 // the prebuilt dist/shell/{shim.js,shell.html} are only found from dist.
 import { startShellServer, type ShellServer } from "../../dist/server/shell-server.js";
 
-// End-to-end proof that real MakeCode console diagnostics flow through the whole
-// chain (page console -> adapter capture -> PuppeteerDriver.setProject error).
+// End-to-end proof that invalid TS is rejected on the server target with real
+// diagnostics: the shim adapter's pre-validation (local pxt-mkc compile in the
+// shell page) throws before the code reaches the editor, and the error
+// traverses PuppeteerDriver back to Node. (The CDP console scrape remains as
+// fallback for residual decompile failures; it's covered by unit tests.)
 // Launches Chrome + loads makecode.microbit.org, so it's opt-in:
 //   MKCP_PUPPETEER_IT=1 npx vitest run test/server/makecode-diagnostics.puppeteer.test.ts
 const run = process.env.MKCP_PUPPETEER_IT ? describe : describe.skip;
@@ -55,10 +58,10 @@ run("MakeCode compiler diagnostics surface in setProject errors", () => {
     );
 
     expect(err).not.toBeNull();
-    expect(err!.message).toContain("failed to compile to blocks");
+    expect(err!.message).toContain("was not loaded because it does not compile");
     expect(err!.message).toContain("Compiler errors:");
     expect(err!.message).toMatch(/Cannot find name 'accelermeter'/);
     expect(err!.message).toMatch(/TS\d+/);
     await page.close();
-  }, 75_000);
+  }, 120_000);
 });
