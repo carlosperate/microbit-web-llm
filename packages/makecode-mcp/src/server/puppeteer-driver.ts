@@ -1,4 +1,8 @@
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "../browser/driver-port.js";
+import {
+  COMPILE_TO_BLOCKS_RE,
+  appendCompilerErrors,
+} from "../shared/compile-errors.js";
 import type { PageLike } from "./browser-pool.js";
 
 // Iframe RPC boundary. The shim methods (see src/shell/shim.ts) return
@@ -50,11 +54,9 @@ export class PuppeteerDriver implements MakeCodeDriver {
   // gets line/column messages to fix. Only enrich genuine compile failures;
   // transport errors must not get stale diagnostics stapled on.
   private compileError(message: string): Error {
-    if (/failed to compile to blocks/i.test(message)) {
+    if (COMPILE_TO_BLOCKS_RE.test(message)) {
       const diagnostics = this.page.recentDiagnostics?.(DIAGNOSTICS_WINDOW_MS) ?? [];
-      if (diagnostics.length > 0) {
-        return new Error(`${message}\n\nCompiler errors:\n${diagnostics.join("\n")}`);
-      }
+      return new Error(appendCompilerErrors(message, diagnostics));
     }
     return new Error(message);
   }

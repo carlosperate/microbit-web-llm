@@ -99,6 +99,54 @@ describe("IframeExecutor — stateful tools", () => {
   });
 });
 
+describe("IframeExecutor — setCode local diagnostics enrichment", () => {
+  const COMPILE_HINT =
+    "Code was loaded into the editor but failed to compile to blocks. Fix the TypeScript and call session_set_code again.";
+
+  it("appends local compiler errors to decompile failures", async () => {
+    const driver = makeDriver();
+    driver.setProject.mockRejectedValueOnce(new Error(COMPILE_HINT));
+    const localDiagnostics = vi.fn(async () => [
+      "main.ts(5,1): error TS2304: Cannot find name 'accelermeter'.",
+    ]);
+    const exec = new IframeExecutor(driver, localDiagnostics);
+    await expect(exec.setCode("accelermeter.x()")).rejects.toThrow(
+      COMPILE_HINT +
+        "\n\nCompiler errors:\nmain.ts(5,1): error TS2304: Cannot find name 'accelermeter'.",
+    );
+    expect(localDiagnostics).toHaveBeenCalledWith("accelermeter.x()");
+  });
+
+  it("rethrows the original error when no diagnostics are found", async () => {
+    const driver = makeDriver();
+    driver.setProject.mockRejectedValueOnce(new Error(COMPILE_HINT));
+    const exec = new IframeExecutor(driver, async () => []);
+    const err = await exec.setCode("x").then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err!.message).toBe(COMPILE_HINT);
+  });
+
+  it("does not consult the local compiler for transport errors", async () => {
+    const driver = makeDriver();
+    driver.setProject.mockRejectedValueOnce(new Error("Attempted to use detached Frame"));
+    const localDiagnostics = vi.fn(async () => ["should not appear"]);
+    const exec = new IframeExecutor(driver, localDiagnostics);
+    await expect(exec.setCode("x")).rejects.toThrow("Attempted to use detached Frame");
+    expect(localDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("rethrows the original error if the diagnostics provider itself fails", async () => {
+    const driver = makeDriver();
+    driver.setProject.mockRejectedValueOnce(new Error(COMPILE_HINT));
+    const exec = new IframeExecutor(driver, async () => {
+      throw new Error("compiler exploded");
+    });
+    await expect(exec.setCode("x")).rejects.toThrow(COMPILE_HINT);
+  });
+});
+
 describe("IframeExecutor — stateless _from_code tools", () => {
   let driver: DriverMocks;
   let exec: IframeExecutor;

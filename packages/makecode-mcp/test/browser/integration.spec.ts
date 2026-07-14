@@ -95,8 +95,14 @@ test.describe("MakeCodePanel integration", () => {
     await page.locator("textarea").fill('basic.showString("oops"');
     await clickButton(page, "session_set_code");
 
-    await expect(page.getByText(/failed to compile to blocks/i)).toBeVisible({ timeout: 10_000 });
+    // 30 s: the error only surfaces after the local compiler enriches it,
+    // which on a cold cache includes the ~4.6 MB pxt-mkc editor download.
+    await expect(page.getByText(/failed to compile to blocks/i)).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/Fix the TypeScript and call session_set_code again/i)).toBeVisible({ timeout: 10_000 });
+    // Local pxt-mkc diagnostics appended to the same error (would be absent
+    // if the compiler failed open, e.g. missing "path" alias in vite config).
+    await expect(page.getByText(/Compiler errors:/)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/main\.ts\(\d+,\d+\): error TS\d+/)).toBeVisible({ timeout: 10_000 });
   });
 
 });
