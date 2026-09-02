@@ -4,34 +4,32 @@ import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { isDeadPageError } from "./page-errors.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
 import { startShellServer, type ShellServer } from "./shell-server.js";
-import type { OpenTabOptions, TabHandle, TabPool } from "./tab-pool.js";
+import type { TabPool } from "./tab-pool.js";
 
 const log = createLogger("puppeteer-tab-pool");
 
 export interface PuppeteerTabPoolOptions {
-  renderPool: BrowserPoolLike;
-  sessionPool: BrowserPoolLike;
+  browserPool: BrowserPoolLike;
+  /** Show the shared editor in a real OS window (`--headed`). */
   headed?: boolean;
 }
 
 export class PuppeteerTabPool implements TabPool {
-  private readonly renderPool: BrowserPoolLike;
-  private readonly sessionPool: BrowserPoolLike;
+  private readonly browserPool: BrowserPoolLike;
   private readonly headed: boolean;
-  private headedLogged = false;
   private shellPromise: Promise<ShellServer> | null = null;
-  // Persistent editor tab shared by all `*_from_code` calls. Loaded once at
-  // startup (loading MakeCode can take many seconds on cold cache / slow
-  // network, so reopening per-call is a non-starter) and reused thereafter.
+  // The one editor tab, shared by the `*_from_code` tools and by every session
+  // op that needs MakeCode. Loaded once at startup (loading MakeCode can take
+  // many seconds on cold cache / slow network, so reopening per-call is a
+  // non-starter) and reused thereafter.
   private statelessPagePromise: Promise<PageLike> | null = null;
-  // Chained promise mutex serialising access to the stateless tab — the
-  // editor only holds one project at a time, so concurrent `*_from_code`
-  // calls would race on import/compile.
+  // Chained promise mutex serialising access to the tab: the editor only holds
+  // one project at a time, so concurrent calls (from different sessions, or
+  // from the `*_from_code` tools) would race on import/compile.
   private statelessLock: Promise<unknown> = Promise.resolve();
 
   constructor(opts: PuppeteerTabPoolOptions) {
-    this.renderPool = opts.renderPool;
-    this.sessionPool = opts.sessionPool;
+    this.browserPool = opts.browserPool;
     this.headed = opts.headed ?? false;
   }
 
@@ -46,26 +44,21 @@ export class PuppeteerTabPool implements TabPool {
     return this.shellPromise;
   }
 
-  private async openSessionShellPage(opts?: OpenTabOptions): Promise<PageLike> {
-    if (this.headed && !this.headedLogged) {
-      this.headedLogged = true;
-      log.info("session pool: headed mode");
+  private async openEditorPage(url: string): Promise<PageLike> {
+    if (this.headed) {
+      log.info("headed mode: opening the editor in its own window");
+      return this.browserPool.openWindow(url);
     }
-    const shell = await this.shell();
-    const url = new URL(shell.url);
-    if (opts?.sessionId) url.searchParams.set("session", opts.sessionId);
-    if (opts?.label !== undefined) url.searchParams.set("label", opts.label);
-    return this.sessionPool.openWindow(url.toString());
+    const page = await this.browserPool.openPage();
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    return page;
   }
 
   private statelessPage(): Promise<PageLike> {
     if (!this.statelessPagePromise) {
       const p = (async () => {
-        const [shell, page] = await Promise.all([
-          this.shell(),
-          this.renderPool.openPage(),
-        ]);
-        await page.goto(shell.url, { waitUntil: "domcontentloaded" });
+        const shell = await this.shell();
+        const page = await this.openEditorPage(shell.url);
         // Block until the embedded editor finishes loading — `__mkcp.ready()`
         // resolves on `onEditorContentLoaded`. Without this the first stateless
         // call would itself trigger and wait for MakeCode to load.
@@ -88,28 +81,13 @@ export class PuppeteerTabPool implements TabPool {
   /**
    * Kick off stateless-tab loading without awaiting. Called at MCP startup so
    * the editor (which can take minutes on cold cache / slow connection) has
-   * the maximum window to finish loading before the first `*_from_code` call.
+   * the maximum window to finish loading before the first tool call needs it.
    */
   prewarm(): void {
     this.statelessPage().catch(() => {
       // Swallow — next call to statelessPage() will see the cleared promise
       // and retry.
     });
-  }
-
-  async openTab(opts?: OpenTabOptions): Promise<TabHandle> {
-    const page = await this.openSessionShellPage(opts);
-    const endReady = log.time("session tab: MakeCode editor ready");
-    try {
-      await page.evaluate(`window.__mkcp.ready()`);
-    } finally {
-      endReady();
-    }
-    const driver: MakeCodeDriver = new PuppeteerDriver(page);
-    return {
-      driver,
-      close: () => page.close().catch(() => {}),
-    };
   }
 
   async withStatelessTab<T>(
@@ -163,8 +141,7 @@ export class PuppeteerTabPool implements TabPool {
     this.shellPromise = null;
     this.statelessPagePromise = null;
     if (statelessPage) await statelessPage.then((p) => p.close()).catch(() => {});
-    await this.renderPool.dispose();
-    await this.sessionPool.dispose();
+    await this.browserPool.dispose();
     if (shell) await (await shell).close().catch(() => {});
   }
 }

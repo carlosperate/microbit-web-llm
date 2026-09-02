@@ -31,9 +31,9 @@ export interface BrowserExecutor {
 }
 
 // Server target: one MCP server can multiplex many LLM clients, so sessions
-// are first-class. Each session maps to a puppeteer tab.
+// are first-class. A session is server-side data (its project), not a tab.
 export interface StartSessionOptions {
-  /** Human label shown in the OS window title when the server runs headed. */
+  /** Human label recorded with the session; descriptive only. */
   label?: string;
 }
 

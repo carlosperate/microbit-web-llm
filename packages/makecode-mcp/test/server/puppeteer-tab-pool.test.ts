@@ -53,162 +53,86 @@ function makePoolDouble(): BrowserPoolLike & {
   } as never;
 }
 
-describe("PuppeteerTabPool — two-pool routing", () => {
-  it("openTab uses the session pool, not the render pool", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    await pool.openTab();
-
-    expect(sessionPool.openWindow).toHaveBeenCalledOnce();
-    expect(renderPool.openWindow).not.toHaveBeenCalled();
-    expect(renderPool.openPage).not.toHaveBeenCalled();
-  });
-
-  it("openTab waits for the MakeCode editor to become ready before resolving", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((r) => {
-      resolveReady = r;
-    });
-    sessionPool.openWindow.mockImplementationOnce(async (_url: string) => {
-      const p = makePage();
-      (p.evaluate as MockedFunction<() => Promise<unknown>>).mockImplementation(
-        () => readyPromise as unknown as Promise<unknown>,
-      );
-      sessionPool.pages.push(p);
-      return p;
-    });
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    let resolved = false;
-    const openP = pool.openTab().then((h) => {
-      resolved = true;
-      return h;
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    expect(resolved).toBe(false);
-    resolveReady();
-    await openP;
-    expect(resolved).toBe(true);
-    const page = sessionPool.pages[0];
-    expect(page.evaluate).toHaveBeenCalled();
-    const firstArg = (page.evaluate as MockedFunction<(...a: unknown[]) => Promise<unknown>>).mock.calls[0][0];
-    expect(String(firstArg)).toContain("__mkcp.ready");
-  });
-
-  it("openTab appends session and label to the shell URL", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    await pool.openTab({ sessionId: "abc-123", label: "first session" });
-
-    expect(sessionPool.openWindow).toHaveBeenCalledOnce();
-    const url = new URL(sessionPool.openWindow.mock.calls[0][0]);
-    expect(url.pathname).toMatch(/shell\.html$/);
-    expect(url.searchParams.get("session")).toBe("abc-123");
-    expect(url.searchParams.get("label")).toBe("first session");
-  });
-
-  it("openTab omits the label param when no label is given", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    await pool.openTab({ sessionId: "abc-123" });
-
-    const url = new URL(sessionPool.openWindow.mock.calls[0][0]);
-    expect(url.searchParams.get("session")).toBe("abc-123");
-    expect(url.searchParams.has("label")).toBe(false);
-  });
-
-  it("openTab creates each session in its own window via openWindow(url)", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    await pool.openTab();
-    await pool.openTab();
-
-    expect(sessionPool.openWindow).toHaveBeenCalledTimes(2);
-    const urls = sessionPool.openWindow.mock.calls.map((c) => c[0]);
-    expect(urls.every((u) => typeof u === "string" && u.includes("shell"))).toBe(
-      true,
-    );
-    expect(sessionPool.openPage).not.toHaveBeenCalled();
-  });
-
-  it("prewarm opens the stateless editor tab in the render pool eagerly", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+describe("PuppeteerTabPool — the shared editor tab", () => {
+  it("prewarm opens the shared editor tab headless by default", async () => {
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     pool.prewarm();
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(renderPool.openPage).toHaveBeenCalledOnce();
-    expect(sessionPool.openPage).not.toHaveBeenCalled();
-    expect(sessionPool.openWindow).not.toHaveBeenCalled();
+    expect(browserPool.openPage).toHaveBeenCalledOnce();
+    expect(browserPool.openWindow).not.toHaveBeenCalled();
+    expect(browserPool.pages[0].goto).toHaveBeenCalledWith(
+      "http://127.0.0.1:0/shell.html",
+      expect.anything(),
+    );
+  });
+
+  it("headed mode opens the shared editor in a real OS window instead", async () => {
+    // One window for the whole server: sessions are data, so there is nothing
+    // per-session left to show. The user still gets to watch MakeCode work.
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool, headed: true });
+
+    await pool.withStatelessTab(async () => "ok");
+
+    expect(browserPool.openWindow).toHaveBeenCalledWith(
+      "http://127.0.0.1:0/shell.html",
+    );
+    expect(browserPool.openPage).not.toHaveBeenCalled();
+  });
+
+  it("the editor tab is opened once and shared by every call, headed or not", async () => {
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool, headed: true });
+
+    await pool.withStatelessTab(async () => "a");
+    await pool.withStatelessTab(async () => "b");
+
+    expect(browserPool.openWindow).toHaveBeenCalledOnce();
   });
 
   it("prewarm is idempotent — repeated calls reuse the same stateless tab", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     pool.prewarm();
     pool.prewarm();
     await pool.withStatelessTab(async () => "ok");
 
-    expect(renderPool.openPage).toHaveBeenCalledOnce();
+    expect(browserPool.openPage).toHaveBeenCalledOnce();
   });
 
   it("prewarm failures do not propagate and a later call retries", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    renderPool.openPage.mockRejectedValueOnce(new Error("boom"));
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    browserPool.openPage.mockRejectedValueOnce(new Error("boom"));
+    const pool = new PuppeteerTabPool({ browserPool });
 
     expect(() => pool.prewarm()).not.toThrow();
     await new Promise((r) => setTimeout(r, 0));
 
     await pool.withStatelessTab(async () => "ok");
-    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
-  });
-
-  it("withStatelessTab uses the render pool, not the session pool", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
-
-    await pool.withStatelessTab(async () => "ok");
-
-    expect(renderPool.openPage).toHaveBeenCalledOnce();
-    expect(sessionPool.openPage).not.toHaveBeenCalled();
+    expect(browserPool.openPage).toHaveBeenCalledTimes(2);
   });
 
   it("withStatelessTab reuses the same persistent page across calls (no per-call reopen)", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     await pool.withStatelessTab(async () => "a");
     await pool.withStatelessTab(async () => "b");
     await pool.withStatelessTab(async () => "c");
 
     // One openPage for the persistent tab, reused for every call.
-    expect(renderPool.openPage).toHaveBeenCalledOnce();
+    expect(browserPool.openPage).toHaveBeenCalledOnce();
   });
 
   it("withStatelessTab serialises concurrent calls so the editor's single-project state can't race", async () => {
     // Two concurrent calls must run sequentially. We verify by latching:
     // the second call must not start until the first releases.
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     const order: string[] = [];
     let release1!: () => void;
@@ -237,9 +161,8 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     // Chrome can discard/freeze an idle background tab (or its renderer is
     // recycled), detaching the frame so the next page.evaluate throws. The
     // stateless path is pure, so a transparent rebuild + retry must recover.
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     let calls = 0;
     const result = await pool.withStatelessTab(async () => {
@@ -253,15 +176,14 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     expect(result).toBe("ok");
     expect(calls).toBe(2);
     // Original stateless tab opened, died, replacement opened.
-    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
+    expect(browserPool.openPage).toHaveBeenCalledTimes(2);
     // The dead page was closed so it doesn't leak.
-    expect(renderPool.pages[0].close).toHaveBeenCalledOnce();
+    expect(browserPool.pages[0].close).toHaveBeenCalledOnce();
   });
 
   it("withStatelessTab does not retry on a normal (non-dead-page) error", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     let calls = 0;
     await expect(
@@ -271,13 +193,12 @@ describe("PuppeteerTabPool — two-pool routing", () => {
       }),
     ).rejects.toThrow(/failed to compile to blocks/);
     expect(calls).toBe(1);
-    expect(renderPool.openPage).toHaveBeenCalledOnce();
+    expect(browserPool.openPage).toHaveBeenCalledOnce();
   });
 
   it("withStatelessTab gives up after one retry if the replacement also dies", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     let calls = 0;
     await expect(
@@ -287,13 +208,12 @@ describe("PuppeteerTabPool — two-pool routing", () => {
       }),
     ).rejects.toThrow(/Target closed/);
     expect(calls).toBe(2);
-    expect(renderPool.openPage).toHaveBeenCalledTimes(2);
+    expect(browserPool.openPage).toHaveBeenCalledTimes(2);
   });
 
   it("withStatelessTab still releases the lock if the user fn throws", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
     await expect(
       pool.withStatelessTab(async () => {
@@ -304,14 +224,14 @@ describe("PuppeteerTabPool — two-pool routing", () => {
     await expect(pool.withStatelessTab(async () => "ok")).resolves.toBe("ok");
   });
 
-  it("dispose disposes both pools", async () => {
-    const renderPool = makePoolDouble();
-    const sessionPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ renderPool, sessionPool });
+  it("dispose closes the editor tab and disposes the browser pool", async () => {
+    const browserPool = makePoolDouble();
+    const pool = new PuppeteerTabPool({ browserPool });
 
+    await pool.withStatelessTab(async () => "ok");
     await pool.dispose();
 
-    expect(renderPool.dispose).toHaveBeenCalledOnce();
-    expect(sessionPool.dispose).toHaveBeenCalledOnce();
+    expect(browserPool.pages[0].close).toHaveBeenCalledOnce();
+    expect(browserPool.dispose).toHaveBeenCalledOnce();
   });
 });

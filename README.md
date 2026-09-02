@@ -51,7 +51,7 @@ npm run dev:test-mcp -w makecode-mcp # Build + launch MCP Inspector against the 
 ┌───────────▼──────────────────────────────────▼─────────────┐
 │ makecode-mcp │                                             │
 │ -------------┘               │                             │
-│ browser: IframeExecutor      │ MCP server: TabExecutor     │
+│ browser: IframeExecutor      │ MCP server: SessionExecutor │
 │          + MakeCodePanel     │         + Puppeteer tab     │
 │          ─► MakeCode iframe  │         ─► MakeCode iframe  │
 │                                                            │

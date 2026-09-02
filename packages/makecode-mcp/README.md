@@ -3,7 +3,7 @@
 A TypeScript library that exposes the [MakeCode micro:bit editor](https://makecode.microbit.org/) to LLMs through a small tool surface. Ships two targets from a single codebase:
 
 - **`makecode-mcp/browser`**: A React `MakeCodePanel` component and a stateless `IframeExecutor` for driving an embedded MakeCode iframe from an in-browser LLM.
-- **`makecode-mcp/server`**: A Node.js binary (`makecode-mcp`) that runs as a stdio [Model Context Protocol](https://modelcontextprotocol.io) server, using Puppeteer to host one MakeCode tab per LLM session.
+- **`makecode-mcp/server`**: A Node.js binary (`makecode-mcp`) that runs as a stdio [Model Context Protocol](https://modelcontextprotocol.io) server, using Puppeteer to host a MakeCode editor tab that every LLM session shares.
 
 All MakeCode integration goes through [`@microbit/makecode-embed`](https://github.com/microbit-foundation/makecode-embed) — no hand-rolled `postMessage`.
 
@@ -22,9 +22,9 @@ The browser and server targets have different shapes, each matched to how it's u
 
 | | **`BrowserExecutor`** | **`ServerExecutor`** |
 |---|---|---|
-| Session model | One executor = one iframe = one session. The iframe *is* the session. | One process serves many clients; each holds an opaque `session_id` mapped to a Puppeteer tab. |
+| Session model | One executor = one iframe = one session. The iframe *is* the session. | One process serves many clients; each holds an opaque `session_id` naming a project kept in the server's memory. |
 | Tools exposed | 5 (no `session_id`) | 8 (stateful tools take `session_id`, plus `session_start` / `session_end`) |
-| Import | `import { IframeExecutor, MakeCodePanel } from "makecode-mcp/browser"` | `import { buildMcpServer, TabExecutor } from "makecode-mcp/server"` |
+| Import | `import { IframeExecutor, MakeCodePanel } from "makecode-mcp/browser"` | `import { buildMcpServer, SessionExecutor } from "makecode-mcp/server"` |
 
 Never import from `makecode-mcp/server` in browser code and vice versa.
 
@@ -82,7 +82,7 @@ That builds the package and launches the [MCP Inspector](https://modelcontextpro
 
 ### Headed mode (watch the editor live)
 
-By default the server runs Chromium headless. Pass `--headed` (or set `MKCP_HEADED=1`) at launch and every `session_start` opens the MakeCode editor in its own OS window so you can watch the LLM drive it:
+By default the server runs Chromium headless. Pass `--headed` (or set `MKCP_HEADED=1`) at launch and the server's MakeCode editor opens in a visible OS window so you can watch the LLM drive it:
 
 ```bash
 node dist/server/bin.js --headed
@@ -93,9 +93,9 @@ MKCP_HEADED=1 node dist/server/bin.js
 Notes:
 
 - Headed mode is a launch-time choice. Chromium can't be toggled mid-process, so the flag fixes visibility for the whole server lifetime.
-- Each `session_start` creates a separate OS window (via CDP `Target.createTarget({ newWindow: true })`), not just another tab in the same window.
-- `session_start` accepts an optional `label` string; in headed mode it becomes part of the window title (`MakeCode — <label> (<short-session-id>)`) so multiple concurrent sessions are easy to tell apart in the OS taskbar / Cmd-Tab. The label is ignored when headless.
-- The persistent render tab used by the stateless `get_blocks_img_from_code` (and the transient tab used by `get_hex_file_from_code`) stays headless regardless of the flag. Snippet previews never pop windows.
+- There is one window for the whole server, not one per session. Sessions live in the server's memory, so there is nothing session-specific to show; the window is the shared editor every tool call passes through, including the stateless `*_from_code` previews.
+- It opens as a real OS window (via CDP `Target.createTarget({ newWindow: true })`), not a tab in an existing window.
+- Expect the window's content to jump between projects: consecutive calls from different sessions load their own code into it. What each session holds is unaffected by what you see.
 
 ### Server layering
 
@@ -104,16 +104,16 @@ Internally the server layers as:
 ```
 bin.ts (CLI)
   └── buildMcpServer({ executor })
-        └── TabExecutor (implements ServerExecutor)
+        └── SessionExecutor (implements ServerExecutor)
+              ├── SessionStore               (session_id → project files, in memory)
               └── TabPool
                     └── PuppeteerTabPool
-                          ├── renderPool: BrowserPool    (always headless — render & hex tabs)
-                          ├── sessionPool: BrowserPool   (headless or headed per --headed)
+                          ├── browserPool: BrowserPool   (headless, or headed per --headed)
                           ├── PuppeteerDriver            (page.evaluate → window.__mkcp)
                           └── startShellServer()         (serves shell.html + bundled shim)
 ```
 
-Each `session_start` allocates a Puppeteer tab (in headed mode: its own OS window) loading a local shell page; `session_end` closes the tab. Both browser processes stay alive between sessions. See [src/server/](src/server/).
+A session is a record in `SessionStore`, not a browser tab: `session_start` allocates one instantly and `session_end` drops it. Tools that need MakeCode (writes, hex, previews) borrow the one shared editor tab and load the relevant project into it first, so the browser cost is a single tab no matter how many sessions are open. See [src/server/](src/server/).
 
 ## Claude Desktop extension (.mcpb)
 
@@ -128,7 +128,7 @@ This stages the package into `packages/makecode-mcp/.mcpb-staging/`, installs ru
 
 The bundle ships only JavaScript and relies on a system-installed Chrome (or Chromium), which the server locates at startup via [`chrome-launcher`](https://www.npmjs.com/package/chrome-launcher). Two settings are exposed in Claude Desktop's extension UI:
 
-- **Headed mode** — show each MakeCode session in its own browser window. Off by default.
+- **Headed mode** — show the MakeCode editor in a visible browser window so you can watch it work. Off by default.
 - **Chrome executable (optional)** — explicit path to a Chrome/Chromium binary. Leave blank to auto-detect.
 
 If no Chrome install is found and no override is given, the server exits with a stderr message. Install Google Chrome (or Chromium) and try again.
@@ -215,7 +215,7 @@ npm run start:server  -w makecode-mcp   # run the stdio MCP server from dist/
 src/
 ├── shared/     ← tool schemas, types, project defaults, logger (single source of truth)
 ├── browser/    ← IframeExecutor + MakeCodePanel React component
-└── server/     ← TabExecutor, BrowserPool, MCP server, shell page + shim
+└── server/     ← SessionExecutor, SessionStore, BrowserPool, MCP server, shell page + shim
 test/           ← Vitest (unit) + Playwright (integration) tests
 test-page/      ← manual smoke-test Vite entry for the browser target
 ```

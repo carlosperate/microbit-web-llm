@@ -1,4 +1,4 @@
-import type { MakeCodeDriver } from "../browser/driver-port.js";
+import type { MakeCodeDriver, MakeCodeProjectFiles } from "../browser/driver-port.js";
 import type { BlocksImage } from "./types.js";
 import { EMPTY_EDITOR_ERROR, fillProjectDefaults } from "./project-defaults.js";
 
@@ -12,15 +12,22 @@ export async function readCurrentCode(driver: MakeCodeDriver): Promise<string> {
   return project.text["main.ts"] ?? "";
 }
 
+// The project to import for `code`, seeded from `base`: the editor's own files
+// on the browser path, the session's stored files on the server. main.blocks is
+// cleared so the blocks view re-decompiles from the new main.ts; keeping it
+// renders stale blocks, and on first import overwrites main.ts with the
+// decompiled (empty) result.
+export function projectForCode(
+  base: Readonly<Record<string, string>>,
+  code: string,
+): MakeCodeProjectFiles {
+  const { "main.blocks": _drop, ...rest } = base;
+  return { text: { ...fillProjectDefaults(rest, code), "main.blocks": "" } };
+}
+
 export async function writeCode(driver: MakeCodeDriver, code: string): Promise<void> {
   const current = await driver.getProject();
-  // Drop main.blocks so the blocks view re-decompiles from the new main.ts.
-  // Keeping it renders stale blocks; on first import it would even overwrite
-  // main.ts with the decompiled (empty) result.
-  const { "main.blocks": _drop, ...rest } = current.text;
-  await driver.setProject({
-    text: { ...fillProjectDefaults(rest, code), "main.blocks": "" },
-  });
+  await driver.setProject(projectForCode(current.text, code));
 }
 
 export async function renderCurrentBlocks(

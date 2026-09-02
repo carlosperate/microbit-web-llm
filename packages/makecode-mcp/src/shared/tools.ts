@@ -163,7 +163,7 @@ export const serverToolMeta = {
         .string()
         .optional()
         .describe(
-          "Optional human label shown in the OS window title when the server runs in headed mode; ignored otherwise.",
+          "Optional human label for the session, e.g. what the user is building. Recorded with the session and shown in server logs; it does not change behaviour.",
         ),
     },
   },

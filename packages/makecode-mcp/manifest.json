@@ -24,7 +24,7 @@
     "headed_mode": {
       "type": "boolean",
       "title": "Headed mode",
-      "description": "Show each MakeCode session in its own browser window so you can watch the LLM drive the editor. Off by default (runs headless).",
+      "description": "Show the MakeCode editor in a visible browser window so you can watch the LLM drive it. Off by default (runs headless).",
       "default": false,
       "required": false
     },
