@@ -8,6 +8,8 @@ import { writeCode } from "../../src/shared/executor-ops.ts";
 // Built shell-server: it resolves shell assets relative to its own module, so
 // the prebuilt dist/shell/{shim.js,shell.html} are only found from dist.
 import { startShellServer, type ShellServer } from "../../dist/server/shell-server.js";
+import { SessionStore } from "../../src/server/session-store.ts";
+import { ViewRegistry } from "../../src/server/view-registry.ts";
 
 // End-to-end proof that invalid TS is rejected on the server target with real
 // diagnostics: the shim adapter's pre-validation (local pxt-mkc compile in the
@@ -36,7 +38,7 @@ run("MakeCode compiler diagnostics surface in setProject errors", () => {
       env: process.env,
       findSystemChrome: () => Launcher.getFirstInstallation(),
     });
-    shell = await startShellServer();
+    shell = await startShellServer({ store: new SessionStore(), views: new ViewRegistry() });
     browser = await puppeteer.launch({ headless: true, executablePath });
   }, 60_000);
 

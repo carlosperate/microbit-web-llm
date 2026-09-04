@@ -3,6 +3,7 @@ import {
   MakeCodeFrameDriver,
 } from "@microbit/makecode-embed/vanilla";
 import { MakeCodeFrameDriverAdapter } from "../browser/frame-driver-adapter.js";
+import { localCompiler } from "../browser/local-compiler.js";
 import { lazyRetry } from "../shared/lazy-retry.js";
 import { fillProjectDefaults } from "../shared/project-defaults.js";
 
@@ -65,7 +66,9 @@ const ensureAdapter = lazyRetry<MakeCodeFrameDriverAdapter>(async () => {
     },
     () => iframe,
   );
-  adapter = new MakeCodeFrameDriverAdapter(driver);
+  adapter = new MakeCodeFrameDriverAdapter(driver, (code, deps) =>
+    localCompiler.getDiagnostics(code, deps),
+  );
   driver.initialize();
   await ready;
   return adapter;

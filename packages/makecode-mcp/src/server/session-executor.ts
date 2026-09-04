@@ -52,6 +52,9 @@ export interface SessionExecutorOptions {
   reapIntervalMs?: number;
   /** Override the clock. Defaults to `Date.now`. Tests inject a fake. */
   now?: () => number;
+  /** Share the session state with the widget views. Defaults to a private
+   *  store. */
+  store?: SessionStore;
 }
 
 /**
@@ -78,7 +81,7 @@ export class SessionExecutor implements ServerExecutor {
   ) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.now = opts.now ?? Date.now;
-    this.store = new SessionStore({ now: this.now });
+    this.store = opts.store ?? new SessionStore({ now: this.now });
     const reapIntervalMs = opts.reapIntervalMs ?? DEFAULT_REAP_INTERVAL_MS;
     if (this.idleTimeoutMs > 0 && reapIntervalMs > 0) {
       this.reapTimer = setInterval(() => this.reapIdleSessions(), reapIntervalMs);

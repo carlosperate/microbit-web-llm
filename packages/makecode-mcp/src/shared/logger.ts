@@ -13,7 +13,14 @@ function readEnabled(): boolean {
   if (isNode) return env.MKCP_LOG !== "0" && env.MKCP_LOG !== "off";
   const loc = (globalThis as { location?: { search?: string } }).location;
   if (loc?.search && /[?&]mkcp-log=(0|off)\b/.test(loc.search)) return false;
-  const v = (globalThis as { localStorage?: Storage }).localStorage?.getItem?.("mkcp:log");
+  // Reading localStorage throws (not returns undefined) in an opaque origin,
+  // which is where the widget bridge runs under a host sandbox.
+  let v: string | null | undefined;
+  try {
+    v = (globalThis as { localStorage?: Storage }).localStorage?.getItem?.("mkcp:log");
+  } catch {
+    v = undefined;
+  }
   return v !== "0" && v !== "off";
 }
 

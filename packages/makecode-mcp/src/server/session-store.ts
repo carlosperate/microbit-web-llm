@@ -22,6 +22,9 @@ export interface SessionChange {
   sessionId: string;
   /** The new state; absent for `removed`. */
   record?: SessionRecord;
+  /** Who caused it, when it wasn't a tool call: the id of the view whose user
+   *  edit this was. Lets that view skip the echo of its own change. */
+  source?: string;
 }
 
 export type SessionListener = (change: SessionChange) => void;
@@ -84,15 +87,21 @@ export class SessionStore {
     return entry ? snapshot(entry) : undefined;
   }
 
-  /** Replace the project with what the editor just saved. */
-  commit(id: string, files: Record<string, string>): SessionRecord {
+  /** Replace the project with what the editor just saved. `source` names the
+   *  view a user edit came from; omit it for tool-driven writes. */
+  commit(id: string, files: Record<string, string>, source?: string): SessionRecord {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`cannot commit unknown session ${id}`);
     entry.files = { ...files };
     entry.version += 1;
     entry.lastUsedAt = this.now();
     const record = snapshot(entry);
-    this.emit({ type: "committed", sessionId: id, record });
+    this.emit({
+      type: "committed",
+      sessionId: id,
+      record,
+      ...(source !== undefined ? { source } : {}),
+    });
     return record;
   }
 

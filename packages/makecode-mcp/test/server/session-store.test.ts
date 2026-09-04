@@ -134,6 +134,19 @@ describe("SessionStore — change notifications", () => {
     expect(seen.mock.calls[2][0]).toMatchObject({ type: "removed", sessionId: "s1" });
   });
 
+  it("carries the source of a commit so a view can skip its own echo", () => {
+    // A view that pushed an edit must not have it broadcast straight back at
+    // it, or applying the echo would fire another save and loop.
+    const { store } = makeStore();
+    const seen = vi.fn();
+    store.create("s1");
+    store.subscribe(seen);
+    store.commit("s1", { "main.ts": "from a view" }, "view-7");
+    store.commit("s1", { "main.ts": "from a tool" });
+    expect(seen.mock.calls[0][0].source).toBe("view-7");
+    expect(seen.mock.calls[1][0].source).toBeUndefined();
+  });
+
   it("deleting an unknown id notifies nobody", () => {
     const { store } = makeStore();
     const seen = vi.fn();

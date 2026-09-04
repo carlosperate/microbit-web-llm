@@ -6,18 +6,20 @@ import type {
   PageLike,
 } from "../../src/server/browser-pool.ts";
 
-vi.mock("../../src/server/shell-server.js", () => ({
-  startShellServer: vi.fn(async () => ({
-    url: "http://127.0.0.1:0/shell.html",
-    close: async () => {},
-  })),
-}));
-
 vi.mock("../../src/server/puppeteer-driver.js", () => ({
   PuppeteerDriver: class {
     constructor(public page: unknown) {}
   },
 }));
+
+const shellClose = vi.fn(async () => {});
+const shell = {
+  url: "http://127.0.0.1:0/shell.html",
+  origin: "http://127.0.0.1:0",
+  bridgeUrl: "http://127.0.0.1:0/widget-bridge.html?token=t",
+  token: "t",
+  close: shellClose,
+};
 
 function makePage(): PageLike & {
   close: MockedFunction<() => Promise<void>>;
@@ -56,7 +58,7 @@ function makePoolDouble(): BrowserPoolLike & {
 describe("PuppeteerTabPool — the shared editor tab", () => {
   it("prewarm opens the shared editor tab headless by default", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     pool.prewarm();
     await new Promise((r) => setTimeout(r, 0));
@@ -73,7 +75,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
     // One window for the whole server: sessions are data, so there is nothing
     // per-session left to show. The user still gets to watch MakeCode work.
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool, headed: true });
+    const pool = new PuppeteerTabPool({ browserPool, shell, headed: true });
 
     await pool.withStatelessTab(async () => "ok");
 
@@ -85,7 +87,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("the editor tab is opened once and shared by every call, headed or not", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool, headed: true });
+    const pool = new PuppeteerTabPool({ browserPool, shell, headed: true });
 
     await pool.withStatelessTab(async () => "a");
     await pool.withStatelessTab(async () => "b");
@@ -95,7 +97,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("prewarm is idempotent — repeated calls reuse the same stateless tab", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     pool.prewarm();
     pool.prewarm();
@@ -107,7 +109,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
   it("prewarm failures do not propagate and a later call retries", async () => {
     const browserPool = makePoolDouble();
     browserPool.openPage.mockRejectedValueOnce(new Error("boom"));
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     expect(() => pool.prewarm()).not.toThrow();
     await new Promise((r) => setTimeout(r, 0));
@@ -118,7 +120,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("withStatelessTab reuses the same persistent page across calls (no per-call reopen)", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     await pool.withStatelessTab(async () => "a");
     await pool.withStatelessTab(async () => "b");
@@ -132,7 +134,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
     // Two concurrent calls must run sequentially. We verify by latching:
     // the second call must not start until the first releases.
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     const order: string[] = [];
     let release1!: () => void;
@@ -162,7 +164,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
     // recycled), detaching the frame so the next page.evaluate throws. The
     // stateless path is pure, so a transparent rebuild + retry must recover.
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     let calls = 0;
     const result = await pool.withStatelessTab(async () => {
@@ -183,7 +185,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("withStatelessTab does not retry on a normal (non-dead-page) error", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     let calls = 0;
     await expect(
@@ -198,7 +200,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("withStatelessTab gives up after one retry if the replacement also dies", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     let calls = 0;
     await expect(
@@ -213,7 +215,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("withStatelessTab still releases the lock if the user fn throws", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     await expect(
       pool.withStatelessTab(async () => {
@@ -226,12 +228,15 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
 
   it("dispose closes the editor tab and disposes the browser pool", async () => {
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool });
+    const pool = new PuppeteerTabPool({ browserPool, shell });
 
     await pool.withStatelessTab(async () => "ok");
     await pool.dispose();
 
     expect(browserPool.pages[0].close).toHaveBeenCalledOnce();
     expect(browserPool.dispose).toHaveBeenCalledOnce();
+    // The shell server outlives the pool: the MCP server serves the widget
+    // from it, so bin.ts owns closing it.
+    expect(shellClose).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { TOOL } from "./tools.js";
+import { TOOL } from "./tool-names.js";
 
 export const EMPTY_EDITOR_ERROR = `No code loaded in the editor. Call ${TOOL.SESSION_SET_CODE} first to load code before requesting ${TOOL.SESSION_GET_BLOCKS_IMG}.`;
 

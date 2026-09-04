@@ -24,7 +24,7 @@ Before calling a change done, run the affected package's `npm test` and confirm 
 This is a teaching/research POC; a live trace is how the developer and student observers debug it. Logging is on by default and must stay that way.
 
 - Use the shared logger (`packages/makecode-mcp/src/shared/logger.ts`), imported via `makecode-mcp/browser` or `makecode-mcp/server`. Never hand-roll `console.log` prefixes or a second logger.
-- One namespace per module: `const log = createLogger("tool-loop")`. Existing: `app`, `adapter`, `tool-loop`, `webllm` (shared by `webllm-engine.ts` + `webllm-slot.ts`), `comparison`, `panel`, `executor`, `local-compiler` (shared by `local-compiler.ts` + `mkc-host.ts`), `mcp`, `session-executor`, `puppeteer-tab-pool`, `browser-pool`. Reuse these when extending the same area.
+- One namespace per module: `const log = createLogger("tool-loop")`. Existing: `app`, `adapter`, `tool-loop`, `webllm` (shared by `webllm-engine.ts` + `webllm-slot.ts`), `comparison`, `panel`, `executor`, `local-compiler` (shared by `local-compiler.ts` + `mkc-host.ts`), `mcp`, `session-executor`, `puppeteer-tab-pool`, `browser-pool`, `shell-server`, `view-registry`, `widget-channel`, `widget-shim`. Reuse these when extending the same area.
 - Log lifecycle events a reader needs to follow the flow: run entry/exit, each tool-loop step with `finish_reason` + pending-call count, each tool dispatch with args summary + result size, stall detection/recovery, errors.
 - `preview(value, maxChars?)` for anything large (code, PNG/hex base64, JSON). `log.time(label)` for async boundaries that might hang. `log.group`/`log.groupEnd` paired in `try/finally` to bracket a unit of work.
 - **Server code (`packages/makecode-mcp/src/server/`) must not write to stdout** — the MCP stdio transport owns it. The shared logger routes Node output to stderr.
@@ -90,9 +90,58 @@ A `session_id` names a record in `SessionStore` (`src/server/session-store.ts`):
 - **The store never holds a server-side guess.** `session_set_code` imports into the editor, waits for the decompile confirm, then reads the project back and commits *that*, so `main.blocks` is MakeCode's own decompilation and a later view gets a consistent project rather than bare TS. A failed write commits nothing and leaves the previous project intact.
 - **Reads don't touch the editor.** `session_get_code` is a map lookup. `session_get_blocks_img` renders from the stored `main.ts` through the standalone renderer (`renderBlocksImage` takes TS, not a project), so reads can't fail a decompile. Only `session_set_code` and `session_get_hex_file` load the editor, and the hex path must import the stored project first because `compile()` works off whatever the editor holds.
 - **Per-session mutex.** `withSession(id, fn)` chains a promise per session id so a slow write can't be interleaved with a read that would then render a half-written project. The pool's mutex already serialises *tab* access; this one serialises a session's read-then-render sequences. It re-resolves the session after the wait, since it can be ended or reaped while queued, and a write whose session vanished mid-flight drops its commit instead of erroring.
-- **`store.subscribe(fn)`** is the change feed Phase 2 (widget views) attaches to. Nothing on the server consumes it yet; keep it that way until views land.
+- **`store.subscribe(fn)`** is the change feed the widget channel attaches to, and the only way a view learns anything: a tool write and another view's user edit look identical to it. `commit(id, files, source)` carries the view that caused a change so it isn't echoed back at its author.
 
 Sessions cost no browser resources, so `session_start` is instant and an abandoned session leaks only a few KB. See `EmbedMakeCodeSessionInWidgetPlan.md` for why (Phase 1 of the widget work).
+
+### Live session editor widget (MCP Apps)
+Host-by-host findings, measured CSPs, the routes that failed and why, and the open work are in `EmbedMakeCodeSessionInWidgetFindings.md`. Read it before changing anything on this path.
+
+Claude Desktop can show the session's **actual editor**, not a PNG: **`session_start` alone** advertises `ui://makecode-mcp/editor.html`, and the user can drag blocks in it and have the model see the result. Only that tool carries the `resourceUri`: the widget is live, so a later `session_set_code` reaches the attached view over its SSE stream, and advertising it there too just opens a second editor in the conversation.
+
+**The widget hosts MakeCode itself, in a `blob:` iframe.** Hosts sandbox the widget and forbid it from framing third-party origins: Claude's enforced policy is `frame-src 'self' blob: data:`, hardcoded, and Anthropic have said nested iframes are disallowed deliberately ([claude-ai-mcp#40](https://github.com/anthropics/claude-ai-mcp/issues/40), open; [claude-code#59351](https://github.com/anthropics/claude-code/issues/59351), closed as not planned). But `blob:` is allowed, a blob frame *is* a real iframe, and blob URLs are same-origin with their creator — so the widget mirrors MakeCode's own pages through our server (`MakeCodeMirror`, `/mk/*`), turns them into blobs, and frames those. `MakeCodeFrameDriver` then drives it completely unmodified.
+
+Three things this costs, all load-bearing:
+
+1. **Controller mode is gated on being framed *and* on the URL.** pxt does `c && pxt.BrowserUtils.isIFrame() && (r = parseInt(c[1]))` where `c` matches `/controller=(0|1|2)/` against `location.href`. A blob URL has no query string, so `controller=2` travels in the **fragment**; MakeCode then rewrites the hash to `#editor` during startup and only evaluates the mode afterwards, so `rewriteEditorHtml` injects a call to the (memoising) check between `target.js` and `main.js`. Without it the editor renders its home screen and ignores every controller message.
+2. **The compiler worker can't be cross-origin.** Its source is served by us and started as a `blob:` worker (`worker-src 'self' blob:`).
+3. **The simulator is another iframe.** `pxtConfig.simUrl` is redirected to a blob of the simulator page, which works because pxt appends only a `#fragment` by default (`setRunOptionQueryParams` adds query params only for `hideSimButtons`/`queryParameters`). Without this the simulator is CSP-blocked and the editor still works, but there is no micro:bit to run.
+
+**The resource is inlined, so its size is a running cost.** The host fetches it on every render, and a 472 kB widget got `Unable to reach makecode-mcp` out of Claude. Keep it small: `MakeCodeFrameDriverAdapter` takes `localDiagnostics` as a **required** constructor argument rather than defaulting to the local compiler (that default pulled ~440 kB of pxt-mkc into every bundle; `shim.ts` and `MakeCodePanel.tsx` now pass it explicitly), and tool-name constants live in `shared/tool-names.ts` so `shared/project-defaults.ts` no longer drags Zod in behind them. The widget is ~21 kB; check with `npx esbuild src/shell/widget-app.ts --bundle --analyze` before adding an import to this path, and never import from `src/server/` here (`shared/makecode-mirror-contract.ts` holds what both sides need).
+
+**No `_meta.ui.domain`.** Its format is host-defined and inventing a value (`"makecode-mcp"`) coincided with Claude refusing to display the widget at all. Claude gives the widget a real origin on its own; the Inspector's dedicated-origin path is moot there because of `worker-src`.
+
+`_meta.ui.csp` therefore declares `frameDomains: ["blob:", …]` (a spec-compliant host builds `frame-src` from it, so omitting `blob:` would block our own frame) plus MakeCode's origins in `connectDomains`/`resourceDomains`. The app bundle is **inlined** into `editor.html` at `resources/read` time rather than linked, because `'unsafe-inline'` is always permitted while our origin may be absent from `script-src`.
+
+**Host support is not uniform, and the blocker moved.** Claude sends `worker-src 'self' blob:`, which is what the compiler worker needs, so the design works there. The **MCP Inspector hardcodes `worker-src 'none'`** (see `$K` in its bundle; its CSP schema has no worker field to declare, so nothing a server sends can change it), and MakeCode hangs on its loading screen there with the editor chrome painted but no compiler. Verify against Claude's policy with `widget-app.puppeteer.test.ts`, which reproduces it exactly; the Inspector is no longer the stricter host.
+
+Everything below is unchanged, and `packages/app` still uses a plain iframe.
+
+**SSE + POST, not WebSocket.** The plan called for a WS with JSON-RPC, but with the store canonical (Phase 1) there is no request/response traffic to carry: the server pushes projects down, the view posts edits up, and no tool call ever waits on a view. Two plain HTTP routes on the existing server cover it with no new dependency.
+
+- `GET /widget/events?session&token&view` — SSE. The current project is the first frame (that's the hydration), then one per commit, plus `session-gone`. The stream closing is what detaches the view.
+- `POST /widget/save?session&token&view` — a user edit. Last write wins against a concurrent tool write, with a logged warning when `baseVersion` is stale; we don't merge.
+- Both are gated by the startup-minted token **only**. There is deliberately no `Origin` check: the host serves the widget from an origin we cannot predict (a hash subdomain, an ephemeral port), so every request from it is cross-origin with a real `Origin`, and CORS headers are echoed on the stream, the save, the errors and an `OPTIONS` preflight. A page the user happens to have open can guess the port but not a startup UUID.
+
+**`ProjectSync` (`src/shell/widget-sync.ts`) is where the sharp edges live.** Transport and editor are injected so it unit-tests without a browser. Four rules, each one load-bearing:
+
+1. **Every project arrives through `setProject`, never through `initialProjects`.** Handing MakeCode a stored project directly looks cheaper, but `initialProjects` doesn't switch to blocks: MakeCode renders `main.blocks` and regenerates `main.ts` from it, so a project whose blocks lag its TS comes out **empty**. `setProject` switches to blocks and decompiles. Verified the hard way; don't "optimise" the hydration path back.
+2. **Saves are ignored while applying.** Mid-import the editor briefly holds a half-built project; sending that up would overwrite good state.
+3. **Reconcile after applying.** Because of (2) the editor's real result is never reported, and an edit made mid-import would be lost, so after each apply the view reads the editor back and reports it if it differs. This is what keeps the server's copy tracking the editor rather than drifting from it.
+4. **A reconcile that emptied the code is dropped, not reported.** (3) turns any failed import into store corruption otherwise: the emptied editor would be pushed up and the session's code destroyed.
+
+Beyond that, saves equal to the server's copy are skipped (that's what makes echoes harmless), and a burst coalesces to the newest while one POST is in flight.
+
+**The CSP must ride on the `resources/read` result, not just the registration.** Declaring `_meta.ui.csp` on `registerResource` puts it in `resources/list` only, and the host reads the resource again at render time. Without `_meta` on the read result (and on `contents[0]`, since hosts differ on which they read) Claude Desktop applies its default `frame-src 'none'` and the bridge iframe blanks with no error anywhere.
+
+**Blocked in Claude Desktop 1.44121.4 by a host bug (verified 2026-09-03).** Everything up to the host boundary is covered by `widget-bridge.puppeteer.test.ts`, which drives the real stack against real MakeCode: a tool writes code, an attached view shows the decompiled blocks, and the view's own save reaches the store. Beyond it, the host reads our declaration and reports the grant back in the `ui/initialize` result at `hostCapabilities.sandbox.csp`, naming our origin in **both** `connectDomains` and `frameDomains`. It then emits only half of it into the enforced policy:
+```
+connect-src 'self' blob: data: http://127.0.0.1:<port>;   <- connectDomains applied
+frame-src  'self' blob: data:;                            <- frameDomains dropped
+```
+So the widget can `fetch` our server but cannot frame it, and the iframe is refused before any request is issued. (Distinguish this from the `frame-ancestors` bug above, which was ours: there the request *is* made and the bridge is then refused, and no violation reaches the widget because the violated policy is the bridge's own.) Nothing server-side fixes this; the widget is correct and starts working when the host emits `frame-src`. Diagnose with the widget's own failure banner rather than a console: the bridge announces itself via `postMessage` from an inline script in `widget-bridge.html`, and 5 s of silence makes `editor.html` report the granted CSP, the widget origin, a direct `fetch` probe, and the enforced policy from a `securitypolicyviolation` listener. `[mkcp:shell-server] request` lines tell a blocked frame (nothing arrives) from a broken one (the page is fetched).
+
+**Fallback if the host bug persists:** `connectDomains` works, so a widget could stream the session over SSE and render blocks as a `blob:` URL (allowed by `img-src blob:`, unlike a direct `http://127.0.0.1` image) for a live but read-only view. Editing needs Phase 3 (the editor in its own window off the same store).
 
 ### Puppeteer browser pool
 `BrowserPool` manages one persistent browser process for the server's lifetime: launches lazily on first use, exposes `openPage()` / `openWindow(url)` / `withTab(fn)` (always closing the tab in `finally`), never closes the browser itself, relaunches after a crash. It's typed against a minimal `PageLike` + `BrowserLauncher` callback so it's unit-testable with doubles; real Puppeteer is wired only at `bin.ts` via `adaptPuppeteerBrowser`. An `onDisconnected` listener (identity-guarded so a late disconnect can't null a replacement) evicts a crashed/killed browser immediately instead of waiting for the next `isConnected()` check.
@@ -104,17 +153,23 @@ A long-lived cached page can outlive its frame (Chrome discards an idle tab, a r
 ### Server layering
 ```
 bin.ts (CLI, parses --headed / MKCP_HEADED)
-  └── buildMcpServer({ executor })            ← src/server/mcp-server.ts
-        └── SessionExecutor (ServerExecutor)  ← src/server/session-executor.ts
-              ├── SessionStore (session data) ← src/server/session-store.ts
-              └── TabPool (interface)         ← src/server/tab-pool.ts
-                    └── PuppeteerTabPool       ← src/server/puppeteer-tab-pool.ts
-                          ├── browserPool: BrowserPool
-                          ├── adaptPuppeteerBrowser() (CDP openWindow)
-                          ├── PuppeteerDriver  ← src/server/puppeteer-driver.ts
-                          └── startShellServer() ← serves dist/shell/{shim.js, shell.html}
+  ├── SessionStore ─────────────────────────← src/server/session-store.ts
+  ├── ViewRegistry ─────────────────────────← src/server/view-registry.ts
+  ├── startShellServer({ store, views })  ──← src/server/shell-server.ts
+  │     ├── MakeCodeMirror  /mk/*  ─────────← src/server/makecode-mirror.ts
+  │     ├── dist/shell/{shell.html, shim.js}          (the editor tab)
+  │     ├── dist/shell/{widget-bridge.html, widget-shim.js}
+  │     └── createWidgetChannel()  ─────────← src/server/widget-channel.ts
+  ├── buildMcpServer({ executor, editorBridge })  ← src/server/mcp-server.ts
+  │     └── SessionExecutor (ServerExecutor) ← src/server/session-executor.ts
+  │           └── TabPool (interface)        ← src/server/tab-pool.ts
+  │                 └── PuppeteerTabPool     ← src/server/puppeteer-tab-pool.ts
+  │                       ├── browserPool: BrowserPool
+  │                       ├── adaptPuppeteerBrowser() (CDP openWindow)
+  │                       └── PuppeteerDriver ← src/server/puppeteer-driver.ts
+  └── StdioServerTransport
 ```
-`SessionExecutor` owns session lifecycle, generates the `session_id`, keeps the project in its `SessionStore`, and borrows the pool's editor tab for the ops that need one. `TabPool` is the seam that keeps `SessionExecutor` testable without Puppeteer (`PuppeteerTabPool` is the only impl). It also runs an **idle-session reaper** (default 30 min timeout, 1 min interval): each successful per-session call refreshes `lastUsedAt`; the reaper drops stale sessions and remembers up to 256 recent expirations so reuse raises `SessionError("expired")` (precise) rather than `"unknown"`. Override via `new SessionExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })`; `idleTimeoutMs: 0` disables it. Reaping now frees only memory, so the timeout is about not pinning abandoned projects forever, not about closing windows.
+The shell server is started by `bin.ts` (not lazily by the pool) because the MCP server needs its origin to declare the widget's CSP; `bin.ts` also owns closing it. `SessionExecutor` owns session lifecycle, generates the `session_id`, keeps the project in its `SessionStore`, and borrows the pool's editor tab for the ops that need one. `TabPool` is the seam that keeps `SessionExecutor` testable without Puppeteer (`PuppeteerTabPool` is the only impl). It also runs an **idle-session reaper** (default 30 min timeout, 1 min interval): each successful per-session call refreshes `lastUsedAt`; the reaper drops stale sessions and remembers up to 256 recent expirations so reuse raises `SessionError("expired")` (precise) rather than `"unknown"`. Override via `new SessionExecutor(pool, { idleTimeoutMs, reapIntervalMs, now })`; `idleTimeoutMs: 0` disables it. Reaping now frees only memory, so the timeout is about not pinning abandoned projects forever, not about closing windows.
 
 `PuppeteerDriver` implements `MakeCodeDriver` purely as `page.evaluate` calls against `window.__mkcp`. Don't add more IPC surface (e.g. `page.exposeFunction`) unless a tool genuinely can't be one evaluate call.
 
@@ -122,6 +177,14 @@ bin.ts (CLI, parses --headed / MKCP_HEADED)
 Sources under `src/shell/`, bundled at build time by `scripts/build-shim.mjs` (esbuild → `dist/shell/shim.js`, copies `shell.html` + `blocks-viewer.html`; runs after `tsc -b`).
 
 - `shell.html` — one `<iframe id="mk">` + `<script type="module" src="/shim.js">`. The single editor tab loads it; its `<title>` is the OS window title in headed mode (the shim no longer sets one, since there are no per-session windows to tell apart).
+- `widget-bridge.html` + `widget-shim.ts` — the same iframe, driven by `ProjectSync` instead of `page.evaluate`. Served over HTTP with `frame-src https://makecode.microbit.org` (no `default-src`, so nothing unrelated is restricted) and deliberately **no `frame-ancestors`**: an MCP Apps widget runs at an opaque origin, which no source expression matches, `*` included (Chrome: "`*` matches only URLs with network schemes"). A `frame-ancestors *` here made every host refuse to render the bridge, while a top-level load worked fine, so the failure was invisible until `widget-bridge.puppeteer.test.ts` grew the sandboxed-frame case. The token, not this header, keeps other pages out. The shim disables the adapter's local-compiler pre-validation: the server already validated anything it stored, and re-running it would pull the ~4.6 MB compiler into the widget. `window.__mkcpBridge` mirrors `window.__mkcp` as an inspection surface, which is the only way to see the cross-origin editor's real state from a test or a host console.
+
+  **The bridge runs at an opaque origin.** Hosts sandbox the widget with `allow-scripts allow-forms` and strip `allow-same-origin` (the MCP Inspector's `sandbox_proxy.html` documents this), and sandbox flags are inherited by nested frames, so the bridge and the MakeCode iframe below it both get a `null` origin. Consequence: **storage APIs throw rather than return undefined** there. `localStorage` bit us once already, in `shared/logger.ts`, at module scope, which killed the whole shim after its `<script>` had loaded (the tell: `/widget-shim.js` requested, then no `view attached`). Any new `localStorage` / `sessionStorage` / `indexedDB` / `caches` / `document.cookie` access on this path needs a `try/catch`, not `?.`.
+
+  The second consequence is **CORS against our own server**. From `null`, every request the bridge makes to us is cross-origin: `widget-shim.js` is a module script (always fetched in CORS mode) and was fetched then silently discarded, and the SSE stream and the JSON save POST (which preflights) need it too. So the shell server sends `access-control-allow-origin` on its static routes and the widget channel echoes it on the stream, the save, its errors, and an `OPTIONS` preflight answered before the token check. The token, not the origin, is what gates access; `originAllowed` accepts `Origin: null` for the same reason. Symptom to recognise: the asset appears in `[mkcp:shell-server] request` and then nothing happens, because the log records the network hit while the browser rejects the response.
+
+  The third consequence is **MakeCode itself**. Sandbox flags are inherited by nested frames, so the editor loads without `allow-same-origin` and dies on `IDBFactory`, `document.cookie` and `navigator.serviceWorker`, hanging on its loading modal while our sync works perfectly (`view attached` fires, the project arrives). The only lever is `_meta.ui.domain` on the resource, which asks the host for a dedicated origin that *is* granted `allow-same-origin`; the value's format is host-defined and hosts that don't recognise it fall back to their default origin. A host with no dedicated-origin support says so: the Inspector logs `resource declares _meta.ui.domain but no dedicated app origin is available`.
+- `editor.html` + `widget-app.ts` — the live-editor MCP App widget. `editor.html` is a shell whose `__MKCP_CONFIG__` (server origin + token) and `__MKCP_APP_JS__` (the bundled app) are substituted at `resources/read` time; `widget-app.ts` does the host handshake, boots MakeCode from blobs (`makecode-blob.ts`) and runs the same `ProjectSync`. Built as a minified IIFE with no sourcemap, since it is inlined into the resource. `widget-host.ts` holds the JSON-RPC handshake and the session-id shape-walk (tested; the rest is browser-only wiring).
 - `shim.ts` — runs in the shell page, wraps `MakeCodeFrameDriver` + `createMakeCodeRenderBlocks`, exposes `window.__mkcp` (`ready`, `importProject`, `saveProject`, `compile`, `renderBlocksImage`). It **eagerly** starts adapter init on script load so the iframe begins fetching `makecode.microbit.org` immediately; `ready()` returns that same init promise so `statelessPage()` can block until `onEditorContentLoaded`. (Without the eager await, the first tool call would silently trigger and wait on the load while the MCP client already thinks the tool is ready — bad on slow networks.) Each method returns a tagged `ShimResult<T>` (`{ok:true,value} | {ok:false,error}`) so failures don't traverse `page.evaluate` as exceptions picking up a browser-side stack; `PuppeteerDriver` unwraps on the Node side.
 - `blocks-viewer.html` — the MCP Apps (SEP-1865) widget, served via MCP **`resources/read`, not HTTP**. Lets Apps-aware hosts (Claude Desktop) render the blocks PNG **inline in the assistant message** instead of inside the collapsed tool-use accordion. Self-contained page that listens for the host postMessage envelope and shape-walks the payload for an `{type:"image", data, mimeType:"image/*"}` block (shape-walk tolerates envelope differences across Claude Desktop / Claude.ai / VS Code). **Resolution:** `shim.ts` rasterizes the PNG at `scale=2` (high-res source); the widget pins `<img>` width to half the PNG's pixel width so it renders logical-sized and crisp on HiDPI. Raw-PNG hosts (LM Studio, Claude Code) have no display-width knob, so they show the 2× PNG fit to their column — sharp but larger. If you change the shim scale, change the widget's `/2` divisor to match. The base64 `image` block is **never removed** — it stays the canonical result + fallback for non-Apps hosts (LM Studio, Inspector) and the model's vision context. `mcp-server.ts` reads it once at init (fail-fast) and serves it at `ui://makecode-mcp/blocks-viewer.html`; the two image tools advertise that URI via `_meta.ui.resourceUri`.
 - `shell-server.ts` (Node) reads prebuilt `dist/shell/{shim.js, shell.html}` at startup and serves them on an ephemeral `127.0.0.1` port; throws on startup if they're missing rather than 404'ing every call. It does **not** serve `blocks-viewer.html` (that's MCP `resources/read`).
@@ -138,7 +201,7 @@ This buys editor-side TS-compile validation for `get_blocks_img_from_code` free 
 Each handler is wrapped in `safe(name, fn)`, which catches `SessionError` + arbitrary errors and returns `{ isError: true, content: [{type:"text", text: JSON.stringify({error, code})}] }`. Without it, `McpServer` would surface a throw as a transport-level error, losing the `missing`/`unknown`/`expired` taxonomy LLMs self-correct on. (`expired` = idle reaper closed the session; model treats it like `unknown` — start a new one.)
 
 ### CLI, Chrome, .mcpb packaging
-`bin.ts` (the `makecode-mcp` bin) wires `PuppeteerTabPool → SessionExecutor → buildMcpServer → StdioServerTransport` and disposes on SIGINT/SIGTERM. It's a standard stdio MCP server — point hosts at `node dist/server/bin.js`. Local manual testing: `npm run dev:test-mcp -w makecode-mcp` (builds + launches MCP Inspector).
+`bin.ts` (the `makecode-mcp` bin) wires `PuppeteerTabPool → SessionExecutor → buildMcpServer → StdioServerTransport` and disposes on SIGINT/SIGTERM. It's a standard stdio MCP server — point hosts at `node dist/server/bin.js`. Local manual testing: `npm run dev:test-mcp -w makecode-mcp` (builds + launches MCP Inspector; `-headless` variant runs the browser headless). Pinned to `@latest` deliberately: MCP Apps rendering arrived in Inspector 2.x, and `npx` silently reuses a stale cached copy otherwise. Inspector 2.5.0 builds the widget sandbox CSP from `_meta.ui.csp` and accepts an `http://127.0.0.1:<port>` origin, so it renders the session-editor widget where Claude Desktop cannot. MCPJam Inspector also renders MCP Apps but requires an account, so it isn't wired up here.
 
 Chrome is located at startup by `resolveChromePath` (`src/server/chrome-path.ts`): prefers `PUPPETEER_EXECUTABLE_PATH`, else `Launcher.getFirstInstallation()` from `chrome-launcher`; the path is passed to every `puppeteer.launch`. The bundled Chromium download is skipped in the .mcpb install (`PUPPETEER_SKIP_DOWNLOAD=true`) so the bundle stays OS-agnostic — the user supplies Chrome.
 
@@ -146,6 +209,7 @@ Chrome is located at startup by `resolveChromePath` (`src/server/chrome-path.ts`
 
 ### Shared modules — don't re-declare
 - **`shared/project-defaults.ts`** — default project files (`pxt.json` with `preferredEditor: "blocksprj"`, `main.blocks`, `README.md`) + `EMPTY_EDITOR_ERROR`, via `fillProjectDefaults(text, code)`. Both executors and the shim import from here.
+- **`shell/widget-sync.ts`** — the view-side sync rules. Anything about when to import, when to report, and when to stay quiet belongs here, not in `widget-shim.ts` (which is wiring, and untestable without a browser).
 - **`shared/tool-results.ts`** — result codecs: `encodeBlocksImage`/`encodeHex` (tool-loop), `blocksImageMcpContent`/`hexFileMcpPayload` (MCP wrapper), `stubImageResult`/`stubHexResult` (history flatten + meter), `decodeBlocksImage` (adapter). Never rebuild these shapes inline.
 
 ## Package: `app`
@@ -231,5 +295,9 @@ Toggled via `comparisonMode` in `ChatSettings`. Purpose: judge which small model
 - Don't duplicate tool schemas (`shared/tools.ts`) or project defaults (`shared/project-defaults.ts`).
 - Don't `display:none` an inactive comparison iframe — use `opacity:0; pointer-events:none`.
 - Don't nest `singleChatLayout` as a function component — keep it inlined JSX.
+- Don't hydrate the widget's editor through `initialProjects` — it empties `main.ts`. See "Live session editor widget".
+- Don't make a tool call wait on a widget view. Views are observers; the store answers tools whether or not anyone is watching.
+- Don't try to frame `makecode.microbit.org` (or our own origin) from the widget — hosts forbid it. The blob route is the only one that works, and it needs all three of its parts.
+- Don't drop `blob:` from `frameDomains`, and don't link the widget's script instead of inlining it.
 - Don't run three concurrent `WebLLMSlot`s — single-slot + reload-on-switch is intentional.
 - Don't reintroduce `Promise.all` for tool-call batches — sequential emission order is intentional.

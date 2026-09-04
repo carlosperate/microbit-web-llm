@@ -3,6 +3,7 @@ export { serverTools as tools, serverToolNames as toolNames } from "../shared/to
 export * from "./browser-pool.js";
 export * from "./tab-pool.js";
 export * from "./session-store.js";
+export * from "./view-registry.js";
 export * from "./session-executor.js";
 export * from "./puppeteer-driver.js";
 export * from "./puppeteer-tab-pool.js";

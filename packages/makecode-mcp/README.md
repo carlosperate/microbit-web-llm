@@ -97,20 +97,31 @@ Notes:
 - It opens as a real OS window (via CDP `Target.createTarget({ newWindow: true })`), not a tab in an existing window.
 - Expect the window's content to jump between projects: consecutive calls from different sessions load their own code into it. What each session holds is unaffected by what you see.
 
+### Live editor in Claude Desktop
+
+Hosts that support MCP Apps (Claude Desktop) get the session's **actual MakeCode editor** in the conversation, not just a picture of the blocks. It appears when the model calls `session_start`, stays open for the session, and is a real editor: drag a block in it and the next `session_get_code` returns your change.
+
+It works by hosting MakeCode inside the widget itself, in a `blob:` iframe built from pages this server mirrors, and keeping it in step with the session over a small HTTP channel (SSE down, POST up) guarded by a token minted at startup. The simulator runs too.
+
+The blob route exists because hosts sandbox widgets and refuse to let them frame third-party origins, MakeCode included. `blob:` is permitted, and a blob frame is a real iframe, which is all MakeCode requires before it accepts controller messages. Verified end to end against live MakeCode under Claude's enforced policy by `test/server/widget-app.puppeteer.test.ts`.
+
+Nothing depends on it. Tool calls read and write the server's session state whether or not any editor is attached, so hosts without MCP Apps support (LM Studio) behave exactly as before, and closing the widget doesn't touch the session.
+
 ### Server layering
 
 Internally the server layers as:
 
 ```
 bin.ts (CLI)
-  └── buildMcpServer({ executor })
+  ├── SessionStore                     (session_id → project files, in memory)
+  ├── ViewRegistry                     (session_id → attached editor views)
+  ├── startShellServer({store, views}) (shell + widget bridge + widget channel)
+  └── buildMcpServer({ executor, editorBridge })
         └── SessionExecutor (implements ServerExecutor)
-              ├── SessionStore               (session_id → project files, in memory)
               └── TabPool
                     └── PuppeteerTabPool
                           ├── browserPool: BrowserPool   (headless, or headed per --headed)
-                          ├── PuppeteerDriver            (page.evaluate → window.__mkcp)
-                          └── startShellServer()         (serves shell.html + bundled shim)
+                          └── PuppeteerDriver            (page.evaluate → window.__mkcp)
 ```
 
 A session is a record in `SessionStore`, not a browser tab: `session_start` allocates one instantly and `session_end` drops it. Tools that need MakeCode (writes, hex, previews) borrow the one shared editor tab and load the relevant project into it first, so the browser cost is a single tab no matter how many sessions are open. See [src/server/](src/server/).
@@ -215,7 +226,7 @@ npm run start:server  -w makecode-mcp   # run the stdio MCP server from dist/
 src/
 ├── shared/     ← tool schemas, types, project defaults, logger (single source of truth)
 ├── browser/    ← IframeExecutor + MakeCodePanel React component
-└── server/     ← SessionExecutor, SessionStore, BrowserPool, MCP server, shell page + shim
+└── server/     ← SessionExecutor, SessionStore, ViewRegistry, BrowserPool, MCP server, shell + widget pages
 test/           ← Vitest (unit) + Playwright (integration) tests
 test-page/      ← manual smoke-test Vite entry for the browser target
 ```

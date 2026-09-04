@@ -3,21 +3,24 @@ import type { MakeCodeDriver } from "../browser/driver-port.js";
 import type { BrowserPoolLike, PageLike } from "./browser-pool.js";
 import { isDeadPageError } from "./page-errors.js";
 import { PuppeteerDriver } from "./puppeteer-driver.js";
-import { startShellServer, type ShellServer } from "./shell-server.js";
+import type { ShellServer } from "./shell-server.js";
 import type { TabPool } from "./tab-pool.js";
 
 const log = createLogger("puppeteer-tab-pool");
 
 export interface PuppeteerTabPoolOptions {
   browserPool: BrowserPoolLike;
+  /** Serves the editor shell. Started and closed by the caller, because the
+   *  MCP server needs its origin to declare the widget's CSP. */
+  shell: ShellServer;
   /** Show the shared editor in a real OS window (`--headed`). */
   headed?: boolean;
 }
 
 export class PuppeteerTabPool implements TabPool {
   private readonly browserPool: BrowserPoolLike;
+  private readonly shell: ShellServer;
   private readonly headed: boolean;
-  private shellPromise: Promise<ShellServer> | null = null;
   // The one editor tab, shared by the `*_from_code` tools and by every session
   // op that needs MakeCode. Loaded once at startup (loading MakeCode can take
   // many seconds on cold cache / slow network, so reopening per-call is a
@@ -30,18 +33,8 @@ export class PuppeteerTabPool implements TabPool {
 
   constructor(opts: PuppeteerTabPoolOptions) {
     this.browserPool = opts.browserPool;
+    this.shell = opts.shell;
     this.headed = opts.headed ?? false;
-  }
-
-  private shell(): Promise<ShellServer> {
-    if (!this.shellPromise) {
-      const p = startShellServer().catch((err) => {
-        if (this.shellPromise === p) this.shellPromise = null;
-        throw err;
-      });
-      this.shellPromise = p;
-    }
-    return this.shellPromise;
   }
 
   private async openEditorPage(url: string): Promise<PageLike> {
@@ -57,8 +50,7 @@ export class PuppeteerTabPool implements TabPool {
   private statelessPage(): Promise<PageLike> {
     if (!this.statelessPagePromise) {
       const p = (async () => {
-        const shell = await this.shell();
-        const page = await this.openEditorPage(shell.url);
+        const page = await this.openEditorPage(this.shell.url);
         // Block until the embedded editor finishes loading — `__mkcp.ready()`
         // resolves on `onEditorContentLoaded`. Without this the first stateless
         // call would itself trigger and wait for MakeCode to load.
@@ -136,12 +128,9 @@ export class PuppeteerTabPool implements TabPool {
   }
 
   async dispose(): Promise<void> {
-    const shell = this.shellPromise;
     const statelessPage = this.statelessPagePromise;
-    this.shellPromise = null;
     this.statelessPagePromise = null;
     if (statelessPage) await statelessPage.then((p) => p.close()).catch(() => {});
     await this.browserPool.dispose();
-    if (shell) await (await shell).close().catch(() => {});
   }
 }

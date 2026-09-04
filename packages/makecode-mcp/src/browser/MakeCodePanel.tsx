@@ -6,6 +6,7 @@ import {
 } from "@microbit/makecode-embed/vanilla";
 import { IframeExecutor } from "./iframe-executor.js";
 import { MakeCodeFrameDriverAdapter } from "./frame-driver-adapter.js";
+import { localCompiler } from "./local-compiler.js";
 import { LoadWatchdog } from "./load-watchdog.js";
 import type { BrowserExecutor } from "../shared/types.js";
 import { createLogger } from "../shared/logger.js";
@@ -44,7 +45,9 @@ export function MakeCodePanel({
 
   const ensureAdapter = useCallback(() => {
     if (!adapterRef.current && driverRef.current) {
-      adapterRef.current = new MakeCodeFrameDriverAdapter(driverRef.current);
+      adapterRef.current = new MakeCodeFrameDriverAdapter(driverRef.current, (code, deps) =>
+        localCompiler.getDiagnostics(code, deps),
+      );
     }
     return adapterRef.current;
   }, []);

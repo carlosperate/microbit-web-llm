@@ -2,8 +2,7 @@ import { createMakeCodeRenderBlocks } from "@microbit/makecode-embed/vanilla";
 import type { MakeCodeDriver, MakeCodeProjectFiles } from "./driver-port.js";
 import { compileRejectedError } from "../shared/compile-errors.js";
 import { svgToPngBase64 } from "../shared/svg-to-png.js";
-import { TOOL } from "../shared/tools.js";
-import { localCompiler } from "./local-compiler.js";
+import { TOOL } from "../shared/tool-names.js";
 
 interface WorkspaceSaveEventLike {
   project: {
@@ -79,10 +78,13 @@ export class MakeCodeFrameDriverAdapter implements MakeCodeDriver {
   private compileInFlight = false;
   private renderer: ReturnType<typeof createMakeCodeRenderBlocks> | null = null;
 
+  // `localDiagnostics` is injected rather than defaulted so this module does
+  // not pull pxt-mkc into every bundle. The widget passes a no-op (the server
+  // already validated what it stored) and would otherwise inline ~460 kB of
+  // compiler into an MCP resource; hosts have to fetch that on every render.
   constructor(
     private readonly driver: FrameDriverLike,
-    private readonly localDiagnostics: LocalDiagnostics = (code, deps) =>
-      localCompiler.getDiagnostics(code, deps),
+    private readonly localDiagnostics: LocalDiagnostics,
   ) {}
 
   private getRenderer() {
