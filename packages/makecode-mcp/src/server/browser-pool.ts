@@ -76,43 +76,32 @@ export class BrowserPool implements BrowserPoolLike {
 
   async openPage(): Promise<PageLike> {
     const browser = await this.ensureBrowser();
-    // On the very first openPage after a fresh launch, reuse the initial
-    // about:blank tab Puppeteer/Chromium always opens — otherwise headed mode
-    // shows a leftover blank window next to the real session.
-    if (!this.firstOpenDone && browser.pages) {
-      this.firstOpenDone = true;
-      const existing = await browser.pages();
-      const blank = existing.find(
-        (p) => p.url?.() === "about:blank" || p.url?.() === "",
-      );
-      if (blank && existing.length === 1) return blank;
-    } else {
-      this.firstOpenDone = true;
-    }
-    return browser.newPage();
+    return (await this.claimStartupPage(browser)) ?? (await browser.newPage());
+  }
+
+  /** The blank page Chromium opens on launch, once, or null thereafter. */
+  private async claimStartupPage(browser: BrowserLike): Promise<PageLike | null> {
+    if (this.firstOpenDone) return null;
+    this.firstOpenDone = true;
+    if (!browser.pages) return null;
+    const existing = await browser.pages();
+    if (existing.length !== 1) return null;
+    const only = existing[0]!;
+    const url = only.url?.();
+    return url === "about:blank" || url === "" ? only : null;
   }
 
   async openWindow(url: string): Promise<PageLike> {
     const browser = await this.ensureBrowser();
-    if (browser.openWindow) {
-      const page = await browser.openWindow(url);
-      // After the new window exists, retire any leftover startup about:blank
-      // pages so the user doesn't see a stray blank window next to sessions.
-      if (!this.firstOpenDone && browser.pages) {
-        this.firstOpenDone = true;
-        const existing = await browser.pages();
-        for (const p of existing) {
-          if (p === page) continue;
-          const u = p.url?.();
-          if (u === "about:blank" || u === "") {
-            await p.close().catch(() => {});
-          }
-        }
-      } else {
-        this.firstOpenDone = true;
-      }
-      return page;
+    // Chrome's startup window is already a real OS window, so take it rather
+    // than opening a second and closing this one: headed mode showed a window
+    // appear, another appear, then the first vanish.
+    const startup = await this.claimStartupPage(browser);
+    if (startup) {
+      await startup.goto(url, { waitUntil: "domcontentloaded" });
+      return startup;
     }
+    if (browser.openWindow) return await browser.openWindow(url);
     // Fallback: no native new-window support — open a tab and navigate.
     const page = await this.openPage();
     await page.goto(url, { waitUntil: "domcontentloaded" });

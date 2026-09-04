@@ -56,20 +56,18 @@ function makePoolDouble(): BrowserPoolLike & {
 }
 
 describe("PuppeteerTabPool — the shared editor tab", () => {
-  it("prewarm opens the shared editor tab headless by default", async () => {
+  it("launches no browser until something actually needs MakeCode", async () => {
+    // Every LLM session spawns a server, and hosts spawn more than one, so an
+    // idle server must not cost a Chrome. Nothing is opened at construction;
+    // session_start, session_get_code and session_end never reach here either.
     const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool, shell });
-
-    pool.prewarm();
+    new PuppeteerTabPool({ browserPool, shell, headed: true });
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(browserPool.openPage).toHaveBeenCalledOnce();
+    expect(browserPool.openPage).not.toHaveBeenCalled();
     expect(browserPool.openWindow).not.toHaveBeenCalled();
-    expect(browserPool.pages[0].goto).toHaveBeenCalledWith(
-      "http://127.0.0.1:0/shell.html",
-      expect.anything(),
-    );
   });
+
 
   it("headed mode opens the shared editor in a real OS window instead", async () => {
     // One window for the whole server: sessions are data, so there is nothing
@@ -95,28 +93,7 @@ describe("PuppeteerTabPool — the shared editor tab", () => {
     expect(browserPool.openWindow).toHaveBeenCalledOnce();
   });
 
-  it("prewarm is idempotent — repeated calls reuse the same stateless tab", async () => {
-    const browserPool = makePoolDouble();
-    const pool = new PuppeteerTabPool({ browserPool, shell });
 
-    pool.prewarm();
-    pool.prewarm();
-    await pool.withStatelessTab(async () => "ok");
-
-    expect(browserPool.openPage).toHaveBeenCalledOnce();
-  });
-
-  it("prewarm failures do not propagate and a later call retries", async () => {
-    const browserPool = makePoolDouble();
-    browserPool.openPage.mockRejectedValueOnce(new Error("boom"));
-    const pool = new PuppeteerTabPool({ browserPool, shell });
-
-    expect(() => pool.prewarm()).not.toThrow();
-    await new Promise((r) => setTimeout(r, 0));
-
-    await pool.withStatelessTab(async () => "ok");
-    expect(browserPool.openPage).toHaveBeenCalledTimes(2);
-  });
 
   it("withStatelessTab reuses the same persistent page across calls (no per-call reopen)", async () => {
     const browserPool = makePoolDouble();

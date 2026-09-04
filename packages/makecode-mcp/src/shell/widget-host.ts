@@ -43,6 +43,8 @@ export function sizeMessage(width: number, height: number) {
 export interface HostHandlers {
   onToolResult(params: unknown): void;
   onError(message: string): void;
+  /** The ui/initialize result, which carries the host's capabilities. */
+  onInitialized?(result: unknown): void;
 }
 
 interface Pending {
@@ -94,6 +96,7 @@ export function connectHost(handlers: HostHandlers): void {
   const id = nextId++;
   pending.set(id, {
     resolve: (result) => {
+      handlers.onInitialized?.(result);
       send({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
       // Some hosts hand the triggering result back here instead of notifying.
       handlers.onToolResult(result);

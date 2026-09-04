@@ -11,6 +11,7 @@ import { createLogger, preview } from "../shared/logger.js";
 
 const log = createLogger("mcp");
 
+
 // MCP Apps inline-rendering widget. Both image-returning tools point hosts at
 // this resource via `_meta.ui.resourceUri`. The mimeType must be exactly
 // `text/html;profile=mcp-app` — `@mcp-ui/client` strict-equality-checks it;
@@ -165,13 +166,6 @@ export function buildMcpServer(options: McpServerOptions): McpServer {
           connectDomains: editorOrigins,
           resourceDomains: editorResources,
         },
-      },
-      // ChatGPT reads this legacy snake_case key rather than ui.csp. Harmless
-      // to hosts that don't, which ignore unknown _meta entries.
-      "openai/widgetCSP": {
-        connect_domains: editorOrigins,
-        resource_domains: editorResources,
-        frame_domains: ["blob:", bridge.origin],
       },
     };
     server.registerResource(

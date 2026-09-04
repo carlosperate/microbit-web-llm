@@ -52,10 +52,6 @@ async function main() {
   // that crashes between session_start and session_end would otherwise pin its
   // project in memory for the server's whole lifetime.
   const executor = new SessionExecutor(pool, { store });
-  // Start the shared editor tab loading immediately. MakeCode can take many
-  // seconds on cold cache / slow networks, so prewarming gives the maximum
-  // window before the first tool call needs it.
-  pool.prewarm();
 
   const shutdown = async () => {
     await executor.dispose().catch(() => {});
@@ -64,6 +60,11 @@ async function main() {
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // A stdio server's real lifetime signal is its stdin: when the host goes away
+  // the pipe closes. Without this we outlive it, get reparented to launchd and
+  // keep a Chrome alive for ever — a dozen such orphans were found in the wild.
+  process.stdin.on("end", () => void shutdown());
+  process.stdin.on("close", () => void shutdown());
 
   const server = buildMcpServer({
     executor,

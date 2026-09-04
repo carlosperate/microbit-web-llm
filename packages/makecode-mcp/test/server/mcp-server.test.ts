@@ -216,22 +216,6 @@ describe("McpServer — live session editor widget", () => {
     expect(cspOf(read.contents[0])?.frameDomains).toContain("blob:");
   });
 
-  it("also declares the CSP under ChatGPT's legacy widgetCSP key", async () => {
-    // ChatGPT reads _meta["openai/widgetCSP"] (snake_case) alongside the
-    // standard _meta.ui.csp. Sending only the standard key leaves it granting
-    // no frame domains at all.
-    const legacyOf = (v: unknown) =>
-      (v as { _meta?: Record<string, { frame_domains?: string[]; connect_domains?: string[] }> })
-        ?._meta?.["openai/widgetCSP"];
-    const { resources } = await client.listResources();
-    const editor = resources.find((r) => r.uri === "ui://makecode-mcp/editor.html");
-    expect(legacyOf(editor)?.frame_domains).toContain("blob:");
-    expect(legacyOf(editor)?.connect_domains).toContain(BRIDGE.origin);
-    const read = await client.readResource({ uri: "ui://makecode-mcp/editor.html" });
-    expect(legacyOf(read)?.frame_domains).toContain("blob:");
-    expect(legacyOf(read.contents[0])?.frame_domains).toContain("blob:");
-  });
-
   it("declares the origins the in-page editor needs, and blob: for its frame", async () => {
     // The widget hosts MakeCode in a blob iframe. A spec-compliant host builds
     // frame-src from frameDomains, so omitting blob: would give frame-src

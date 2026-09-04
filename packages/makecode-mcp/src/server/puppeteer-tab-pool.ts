@@ -70,18 +70,6 @@ export class PuppeteerTabPool implements TabPool {
     return this.statelessPagePromise;
   }
 
-  /**
-   * Kick off stateless-tab loading without awaiting. Called at MCP startup so
-   * the editor (which can take minutes on cold cache / slow connection) has
-   * the maximum window to finish loading before the first tool call needs it.
-   */
-  prewarm(): void {
-    this.statelessPage().catch(() => {
-      // Swallow — next call to statelessPage() will see the cleared promise
-      // and retry.
-    });
-  }
-
   async withStatelessTab<T>(
     fn: (driver: MakeCodeDriver) => Promise<T>,
   ): Promise<T> {

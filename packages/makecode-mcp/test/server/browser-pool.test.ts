@@ -176,3 +176,47 @@ describe("BrowserPool", () => {
     expect(second).not.toBe(initial);
   });
 });
+
+describe("BrowserPool — the startup window", () => {
+  function headedDouble() {
+    const startup = makePageDouble();
+    const opened = makePageDouble();
+    const browser = {
+      isConnected: vi.fn(() => true),
+      close: vi.fn(async () => {}),
+      newPage: vi.fn(async () => makePageDouble()),
+      onDisconnected: vi.fn(),
+      pages: vi.fn(async () => [startup]),
+      openWindow: vi.fn(async () => opened),
+    } as unknown as BrowserLike & {
+      openWindow: MockedFunction<(url: string) => Promise<PageLike>>;
+    };
+    (startup as unknown as { url: () => string }).url = () => "about:blank";
+    return { browser, startup, opened };
+  }
+
+  it("reuses Chrome's startup window instead of opening a second one", async () => {
+    // Headed mode showed a window appear, a second appear, then the first
+    // vanish: we were creating a new window and then closing the blank one
+    // Chrome had already put on screen.
+    const { browser, startup } = headedDouble();
+    const pool = new BrowserPool(async () => browser);
+
+    const page = await pool.openWindow("http://example.test/shell.html");
+
+    expect(page).toBe(startup);
+    expect(browser.openWindow).not.toHaveBeenCalled();
+    expect(startup.goto).toHaveBeenCalled();
+    expect(startup.close).not.toHaveBeenCalled();
+  });
+
+  it("opens a real window once the startup one is taken", async () => {
+    const { browser } = headedDouble();
+    const pool = new BrowserPool(async () => browser);
+
+    await pool.openWindow("http://example.test/one");
+    await pool.openWindow("http://example.test/two");
+
+    expect(browser.openWindow).toHaveBeenCalledTimes(1);
+  });
+});

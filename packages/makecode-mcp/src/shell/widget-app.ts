@@ -47,6 +47,7 @@ const editorLoaded = new Promise<void>((r) => {
 // here, so record violations and report them rather than hanging on a spinner.
 const violations: string[] = [];
 let enforcedPolicy = "";
+let hostCapabilities: unknown = null;
 document.addEventListener("securitypolicyviolation", (e) => {
   const line = `${e.violatedDirective} blocked ${String(e.blockedURI).slice(0, 60)}`;
   if (!violations.includes(line)) violations.push(line);
@@ -60,7 +61,8 @@ function reportStuck(): void {
       (blocking.length
         ? `Blocked by this host: ${blocking.slice(0, 4).join(" · ")}. `
         : "No CSP violation was reported. ") +
-      (enforcedPolicy ? `Enforced policy: ${enforcedPolicy.slice(0, 900)}` : ""),
+      `Host capabilities: ${JSON.stringify(hostCapabilities)}. ` +
+      (enforcedPolicy ? `Enforced policy: ${enforcedPolicy.slice(0, 700)}` : ""),
     true,
   );
 }
@@ -189,6 +191,10 @@ declare global {
 }
 
 connectHost({
+  onInitialized: (result) => {
+    hostCapabilities = (result as { hostCapabilities?: unknown } | null)?.hostCapabilities ?? null;
+    log.info("host capabilities", { capabilities: hostCapabilities });
+  },
   onToolResult: (params) => {
     const sessionId = findSessionId(params);
     if (sessionId) {
@@ -198,7 +204,11 @@ connectHost({
         // `started` is already set.
         started = "";
         log.error("could not start the editor", { error: String(err) });
-        status(`Could not load the MakeCode editor: ${String(err)}`, true);
+        status(
+          `Could not load the MakeCode editor: ${String(err)}. ` +
+            `Host capabilities: ${JSON.stringify(hostCapabilities)}`,
+          true,
+        );
       });
     } else if (!started) status("No MakeCode session in this tool result.", true);
   },

@@ -105,6 +105,8 @@ It works by hosting MakeCode inside the widget itself, in a `blob:` iframe built
 
 The blob route exists because hosts sandbox widgets and refuse to let them frame third-party origins, MakeCode included. `blob:` is permitted, and a blob frame is a real iframe, which is all MakeCode requires before it accepts controller messages. Verified end to end against live MakeCode under Claude's enforced policy by `test/server/widget-app.puppeteer.test.ts`.
 
+Host support is uneven. It works in Claude Desktop. The MCP Inspector renders the widget but blocks the compiler worker, so the editor never finishes loading; the ChatGPT desktop app allows the editor but not the connection back to this server.
+
 Nothing depends on it. Tool calls read and write the server's session state whether or not any editor is attached, so hosts without MCP Apps support (LM Studio) behave exactly as before, and closing the widget doesn't touch the session.
 
 ### Server layering
@@ -115,7 +117,7 @@ Internally the server layers as:
 bin.ts (CLI)
   ├── SessionStore                     (session_id → project files, in memory)
   ├── ViewRegistry                     (session_id → attached editor views)
-  ├── startShellServer({store, views}) (shell + widget bridge + widget channel)
+  ├── startShellServer({store, views}) (shell page, widget channel, MakeCode mirror)
   └── buildMcpServer({ executor, editorBridge })
         └── SessionExecutor (implements ServerExecutor)
               └── TabPool
@@ -124,7 +126,7 @@ bin.ts (CLI)
                           └── PuppeteerDriver            (page.evaluate → window.__mkcp)
 ```
 
-A session is a record in `SessionStore`, not a browser tab: `session_start` allocates one instantly and `session_end` drops it. Tools that need MakeCode (writes, hex, previews) borrow the one shared editor tab and load the relevant project into it first, so the browser cost is a single tab no matter how many sessions are open. See [src/server/](src/server/).
+A session is a record in `SessionStore`, not a browser tab: `session_start` allocates one instantly and `session_end` drops it. Tools that need MakeCode (writes, hex, previews) borrow the one shared editor tab and load the relevant project into it first, so the browser cost is a single tab no matter how many sessions are open — and no browser at all is launched until such a tool is called. See [src/server/](src/server/).
 
 ## Claude Desktop extension (.mcpb)
 
